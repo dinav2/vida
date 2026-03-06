@@ -1,0 +1,26 @@
+{
+  "project": "vida",
+  "version": "1.0.0",
+  "stages": [
+    "explore",
+    "draft",
+    "spec",
+    "test-create",
+    "test-apply",
+    "verify",
+    "complete"
+  ],
+  "testFramework": "vitest",
+  "language": "typescript",
+  "agents": {
+    "claude-code": {
+      "enabled": true
+    },
+    "cursor": {
+      "enabled": true
+    }
+  },
+  "gitHooks": {
+    "enabled": true
+  }
+}

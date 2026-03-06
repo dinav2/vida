@@ -1,0 +1,19 @@
+#!/bin/bash
+# SpecSafe pre-commit hook v1.0
+set -e
+
+echo "Running SpecSafe pre-commit checks..."
+
+# Check PROJECT_STATE.md exists
+if [ ! -f "PROJECT_STATE.md" ]; then
+    echo "PROJECT_STATE.md not found."
+    exit 1
+fi
+
+# Run specsafe doctor if available
+if command -v specsafe >/dev/null 2>&1; then
+    specsafe doctor --silent || true
+fi
+
+echo "Pre-commit checks passed"
+exit 0
