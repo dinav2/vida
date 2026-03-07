@@ -27,6 +27,8 @@ type Message struct {
 	Kind     string `json:"kind,omitempty"`
 	Value    string `json:"value,omitempty"`
 	URL      string `json:"url,omitempty"`
+	IDs      string `json:"ids,omitempty"`  // newline-separated desktop IDs for app_list
+	Exec     string `json:"exec,omitempty"` // newline-separated exec strings for app_list
 }
 
 // ReplyFunc sends a reply message to the connected client.

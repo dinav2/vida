@@ -274,10 +274,16 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 			resp.URL = result.ShortcutURL
 		case router.KindAppList:
 			names := make([]string, len(result.Apps))
+			ids := make([]string, len(result.Apps))
+			execs := make([]string, len(result.Apps))
 			for i, a := range result.Apps {
 				names[i] = a.Name
+				ids[i] = a.ID
+				execs[i] = apps.ExpandExec(a.Exec)
 			}
 			resp.Message = strings.Join(names, "\n")
+			resp.IDs = strings.Join(ids, "\n")
+			resp.Exec = strings.Join(execs, "\n")
 		}
 		_ = reply(resp)
 	}

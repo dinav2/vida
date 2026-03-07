@@ -4,7 +4,7 @@
 package main
 
 /*
-#cgo pkg-config: gtk4 gtk4-layer-shell-0
+#cgo pkg-config: gtk4 gtk4-layer-shell-0 gio-unix-2.0
 #include <gtk/gtk.h>
 
 // Declarations for functions implemented in ui.c.
@@ -24,6 +24,11 @@ extern void       vida_results_set_url(GtkWidget *box, const char *url);
 extern void       vida_results_set_apps(GtkWidget *box,
                                         const char **names, int n);
 extern void       vida_grab_focus(GtkWidget *entry);
+extern void       vida_select_row(GtkWidget *box, int idx);
+extern int        vida_count_rows(GtkWidget *box);
+extern void       vida_launch_app(const char *desktop_id);
+extern void       vida_copy_to_clipboard(GtkWidget *widget, const char *text);
+extern void       vida_open_url(const char *url);
 */
 import "C"
 
@@ -48,6 +53,16 @@ import (
 var gWindow *C.GtkWidget
 var gEntry *C.GtkWidget
 var gResults *C.GtkWidget
+
+// --- result selection state (only touched via gtkIdle) ---
+
+var selectedIdx = -1
+var currentKind string
+var currentAppIDs []string
+var currentAppExecs []string
+var currentCalcValue string
+var currentURL string
+var currentAIText string
 
 // --- query state (goroutine-safe) ---
 
@@ -103,8 +118,54 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 		C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
 		return C.TRUE
 	}
+	if keyval == C.GDK_KEY_Down {
+		n := int(C.vida_count_rows(gResults))
+		if n > 0 {
+			selectedIdx = (selectedIdx + 1) % n
+			C.vida_select_row(gResults, C.int(selectedIdx))
+		}
+		return C.TRUE
+	}
+	if keyval == C.GDK_KEY_Up {
+		n := int(C.vida_count_rows(gResults))
+		if n > 0 {
+			if selectedIdx <= 0 {
+				selectedIdx = n - 1
+			} else {
+				selectedIdx--
+			}
+			C.vida_select_row(gResults, C.int(selectedIdx))
+		}
+		return C.TRUE
+	}
 	if keyval == C.GDK_KEY_Return || keyval == C.GDK_KEY_KP_Enter {
-		// TODO: act on current result (copy calc, open URL, launch app)
+		win := (*C.GtkWidget)(unsafe.Pointer(userData))
+		switch currentKind {
+		case "app_list":
+			idx := selectedIdx
+			if idx < 0 {
+				idx = 0
+			}
+			if idx < len(currentAppIDs) {
+				id := currentAppIDs[idx]
+				cid := C.CString(id)
+				C.vida_launch_app(cid)
+				C.free(unsafe.Pointer(cid))
+				C.vida_hide(win)
+			}
+		case "calc":
+			cv := C.CString(currentCalcValue)
+			C.vida_copy_to_clipboard(gEntry, cv)
+			C.free(unsafe.Pointer(cv))
+		case "shortcut":
+			cu := C.CString(currentURL)
+			C.vida_open_url(cu)
+			C.free(unsafe.Pointer(cu))
+		case "ai_stream":
+			ca := C.CString(currentAIText)
+			C.vida_copy_to_clipboard(gEntry, ca)
+			C.free(unsafe.Pointer(ca))
+		}
 		return C.TRUE
 	}
 	return C.FALSE
@@ -126,7 +187,11 @@ func onInput(text string) {
 	cancelInflight()
 
 	if text == "" {
-		gtkIdle(func() { C.vida_results_clear(gResults) })
+		gtkIdle(func() {
+			C.vida_results_clear(gResults)
+			selectedIdx = -1
+			currentKind = ""
+		})
 		return
 	}
 
@@ -149,14 +214,30 @@ func onInput(text string) {
 
 		switch resp.Kind {
 		case "calc":
-			gtkIdle(func() { C.vida_results_set_label(gResults, C.CString(resp.Value)) })
+			val := resp.Value
+			gtkIdle(func() {
+				currentKind = "calc"
+				currentCalcValue = val
+				selectedIdx = -1
+				C.vida_results_set_label(gResults, C.CString(val))
+			})
 		case "shortcut":
 			url := resp.URL
-			gtkIdle(func() { C.vida_results_set_url(gResults, C.CString(url)) })
-		case "app_list":
-			// app_list: daemon sends names in Message field (comma-separated)
-			names := strings.Split(resp.Message, "\n")
 			gtkIdle(func() {
+				currentKind = "shortcut"
+				currentURL = url
+				selectedIdx = -1
+				C.vida_results_set_url(gResults, C.CString(url))
+			})
+		case "app_list":
+			names := strings.Split(resp.Message, "\n")
+			ids := strings.Split(resp.IDs, "\n")
+			execs := strings.Split(resp.Exec, "\n")
+			gtkIdle(func() {
+				currentKind = "app_list"
+				currentAppIDs = ids
+				currentAppExecs = execs
+				selectedIdx = -1
 				cnames := make([]*C.char, len(names))
 				for i, n := range names {
 					cnames[i] = C.CString(n)
@@ -165,7 +246,11 @@ func onInput(text string) {
 				C.vida_results_set_apps(gResults, &cnames[0], C.int(len(cnames)))
 			})
 		case "ai_stream":
-			// Start AI streaming via persistent connection + debounce.
+			gtkIdle(func() {
+				currentKind = "ai_stream"
+				currentAIText = ""
+				selectedIdx = -1
+			})
 			inflightMu.Lock()
 			inflightID = id
 			inflightMu.Unlock()
@@ -174,7 +259,11 @@ func onInput(text string) {
 			})
 			aiDebounce.Trigger()
 		case "empty", "cancelled", "":
-			gtkIdle(func() { C.vida_results_clear(gResults) })
+			gtkIdle(func() {
+				currentKind = ""
+				selectedIdx = -1
+				C.vida_results_clear(gResults)
+			})
 		}
 	}()
 }
@@ -222,7 +311,10 @@ func streamAI(id, input, sock string) {
 		case "token":
 			accumulated.WriteString(msg.Value)
 			text := accumulated.String()
-			gtkIdle(func() { C.vida_results_set_ai_text(gResults, C.CString(text)) })
+			gtkIdle(func() {
+				currentAIText = text
+				C.vida_results_set_ai_text(gResults, C.CString(text))
+			})
 		case "done", "cancelled":
 			return
 		}
@@ -288,6 +380,8 @@ func subscribe(sockPath string) error {
 			gtkIdle(func() {
 				C.vida_entry_clear(gEntry)
 				C.vida_results_clear(gResults)
+				selectedIdx = -1
+				currentKind = ""
 				C.vida_show(gWindow)
 				C.vida_grab_focus(gEntry)
 			})

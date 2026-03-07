@@ -5,6 +5,7 @@
 
 #include <gtk/gtk.h>
 #include <gtk4-layer-shell/gtk4-layer-shell.h>
+#include <gio/gdesktopappinfo.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -125,6 +126,11 @@ static const char *VIDA_CSS =
     "  outline: 1px solid rgba(255, 255, 255, 0.25);"
     "  box-shadow: none;"
     "}"
+    /* Keyboard-selected row — brighter than hover */
+    ".vida-row-selected {"
+    "  background: rgba(255, 255, 255, 0.13);"
+    "  outline: 1px solid rgba(255, 255, 255, 0.2);"
+    "}"
 
     /* Row label: app/calc name */
     ".vida-row-label {"
@@ -234,8 +240,10 @@ GtkWidget *vida_build_window(GtkApplication *app,
     gtk_widget_set_hexpand(results, TRUE);
     gtk_box_append(GTK_BOX(panel), results);
 
-    /* Key controller (window-wide: Escape, Enter) */
+    /* Key controller — CAPTURE phase so we intercept keys before GtkEntry
+     * consumes Enter/Escape/arrows. */
     GtkEventController *key_ctrl = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(key_ctrl, GTK_PHASE_CAPTURE);
     g_signal_connect(key_ctrl, "key-pressed",
                      G_CALLBACK(vida_on_key_pressed), win);
     gtk_widget_add_controller(win, key_ctrl);
@@ -395,4 +403,58 @@ void vida_results_set_apps(GtkWidget *box, const char **names, int n) {
         gtk_box_append(GTK_BOX(box), row);
     }
     if (n > 0) set_separator_visible(box, TRUE);
+}
+
+/* Add/remove the selected highlight from a specific row by index. */
+void vida_select_row(GtkWidget *box, int idx) {
+    int i = 0;
+    GtkWidget *child = gtk_widget_get_first_child(box);
+    while (child) {
+        if (i == idx) {
+            gtk_widget_add_css_class(child, "vida-row-selected");
+        } else {
+            gtk_widget_remove_css_class(child, "vida-row-selected");
+        }
+        child = gtk_widget_get_next_sibling(child);
+        i++;
+    }
+}
+
+/* Return the number of children in the results box. */
+int vida_count_rows(GtkWidget *box) {
+    int n = 0;
+    GtkWidget *child = gtk_widget_get_first_child(box);
+    while (child) { n++; child = gtk_widget_get_next_sibling(child); }
+    return n;
+}
+
+/* Launch a .desktop app by its ID (e.g. "firefox.desktop").
+ * Passes the GDK display launch context so the app gets the correct
+ * Wayland display/compositor connection. */
+void vida_launch_app(const char *desktop_id) {
+    if (!desktop_id || !*desktop_id) return;
+    GDesktopAppInfo *info = g_desktop_app_info_new(desktop_id);
+    if (!info) return;
+    GdkDisplay *display = gdk_display_get_default();
+    GAppLaunchContext *ctx = G_APP_LAUNCH_CONTEXT(gdk_display_get_app_launch_context(display));
+    GError *err = NULL;
+    g_app_info_launch(G_APP_INFO(info), NULL, ctx, &err);
+    if (err) g_error_free(err);
+    g_object_unref(ctx);
+    g_object_unref(info);
+}
+
+/* Copy text to the system clipboard. */
+void vida_copy_to_clipboard(GtkWidget *widget, const char *text) {
+    if (!text || !*text) return;
+    GdkClipboard *cb = gtk_widget_get_clipboard(widget);
+    gdk_clipboard_set_text(cb, text);
+}
+
+/* Open a URL via GtkUriLauncher (reusable from Enter key). */
+void vida_open_url(const char *url) {
+    if (!url || !*url) return;
+    GtkUriLauncher *launcher = gtk_uri_launcher_new(url);
+    gtk_uri_launcher_launch(launcher, NULL, NULL, NULL, NULL);
+    g_object_unref(launcher);
 }
