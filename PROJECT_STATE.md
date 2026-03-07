@@ -10,8 +10,7 @@
 | Metric | Value |
 |--------|-------|
 | Total Specs | 4 |
-| Completion Rate | 75% |
-| Completion Rate | 50% |
+| Completion Rate | 100% |
 | Avg Cycle Time | 2 days |
 
 ### By Stage
@@ -23,17 +22,14 @@
 | TEST-CREATE | 0 | 0% |
 | TEST-APPLY | 0 | 0% |
 | VERIFY | 0 | 0% |
-| SPEC | 1 | 25% |
-| DONE | 3 | 75% |
+| DONE | 4 | 100% |
 | ARCHIVED | 0 | 0% |
 
 ---
 
 ## 📋 Active Specs
 
-| ID | Title | Stage | Priority | Updated |
-|----|-------|-------|----------|---------|
-| SPEC-20260307-004 | App Launching | SPEC | P1 | 2026-03-07 |
+None
 
 ---
 
@@ -44,6 +40,7 @@
 | SPEC-20260305-001 | vida — AI-Native Command Palette for Wayland (MVP Core) | 2026-03-07 | 75 pass, 1 skip |
 | SPEC-20260307-002 | vida Search Input Wiring | 2026-03-07 | 12 pass |
 | SPEC-20260307-003 | vida UI Styling — Mac-Style Launcher | 2026-03-07 | 12 pass |
+| SPEC-20260307-004 | App Launching | 2026-03-07 | 19 pass |
 
 ---
 
