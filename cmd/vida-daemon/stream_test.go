@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -384,6 +385,86 @@ func TestQuery_CancelUnknownID(t *testing.T) {
 	if pingResp["type"] != "pong" {
 		t.Errorf("after cancel of unknown id: ping = %q, want pong", pingResp["type"])
 	}
+}
+
+// --- Regression: app listing ---
+
+// Regression test: daemon must index apps and return kind=app_list for matching input.
+// Previously the index was built but discarded (_ = idx) and app names were never
+// serialized into the IPC response.
+func TestQuery_AppList(t *testing.T) {
+	// Write two fake .desktop files into a temp dir.
+	appsDir := t.TempDir()
+	writeDesktop(t, appsDir, "testbrowser.desktop", "TestBrowser", "web browser")
+	writeDesktop(t, appsDir, "testeditor.desktop", "TestEditor", "text editor")
+
+	bin := buildDaemon(t)
+	sock := filepath.Join(t.TempDir(), "vida.sock")
+	cfgPath := writeDaemonConfig(t, "http://localhost:1")
+
+	// Override app dirs via env var so daemon indexes our fake apps.
+	env := append(os.Environ(),
+		"VIDA_SOCKET="+sock,
+		"VIDA_CONFIG="+cfgPath,
+		"VIDA_APPS_DIRS="+appsDir,
+	)
+	cmd := startDaemonEnv(t, bin, sock, env)
+	defer cmd()
+
+	// Wait for indexing goroutine to complete (it runs async after activate).
+	time.Sleep(300 * time.Millisecond)
+
+	conn := openPersistent(t, sock)
+	defer conn.Close()
+
+	sendRaw(t, conn, map[string]any{
+		"type":  "query",
+		"id":    "app-1",
+		"input": "testbrowser",
+	})
+
+	msg := recvMsg(t, conn, 2*time.Second)
+	if msg["kind"] != "app_list" {
+		t.Fatalf("kind = %q, want app_list (regression: index was previously discarded)", msg["kind"])
+	}
+	message, _ := msg["message"].(string)
+	if !strings.Contains(message, "TestBrowser") {
+		t.Errorf("message %q does not contain TestBrowser", message)
+	}
+}
+
+// writeDesktop writes a minimal .desktop file.
+func writeDesktop(t *testing.T, dir, filename, name, comment string) {
+	t.Helper()
+	content := fmt.Sprintf("[Desktop Entry]\nName=%s\nComment=%s\nExec=%s\nType=Application\n",
+		name, comment, strings.ToLower(name))
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0644); err != nil {
+		t.Fatalf("writeDesktop: %v", err)
+	}
+}
+
+// startDaemonEnv starts a daemon with a custom env slice (used for VIDA_APPS_DIRS override).
+func startDaemonEnv(t *testing.T, bin, sock string, env []string) func() {
+	t.Helper()
+	cmd := exec.Command(bin)
+	cmd.Env = env
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start daemon: %v", err)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("unix", sock, 50*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return func() { cmd.Process.Kill(); _ = cmd.Wait() }
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cmd.Process.Kill()
+	t.Fatalf("socket %q did not become ready", sock)
+	return nil
 }
 
 // --- io helpers ---

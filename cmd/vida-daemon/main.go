@@ -185,6 +185,9 @@ func (d *daemon) rebuildRouter() {
 
 func (d *daemon) indexApps() {
 	dirs := apps.DefaultDirs()
+	if override := os.Getenv("VIDA_APPS_DIRS"); override != "" {
+		dirs = strings.Split(override, ":")
+	}
 	idx, err := apps.BuildIndex(dirs)
 	if err != nil {
 		log.Printf("app indexing failed: %v", err)
