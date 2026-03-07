@@ -9,8 +9,8 @@
 
 | Metric | Value |
 |--------|-------|
-| Total Specs | 3 |
-| Completion Rate | 100% |
+| Total Specs | 4 |
+| Completion Rate | 75% |
 | Completion Rate | 50% |
 | Avg Cycle Time | 2 days |
 
@@ -23,14 +23,17 @@
 | TEST-CREATE | 0 | 0% |
 | TEST-APPLY | 0 | 0% |
 | VERIFY | 0 | 0% |
-| DONE | 3 | 100% |
+| SPEC | 1 | 25% |
+| DONE | 3 | 75% |
 | ARCHIVED | 0 | 0% |
 
 ---
 
 ## 📋 Active Specs
 
-None — all specs complete.
+| ID | Title | Stage | Priority | Updated |
+|----|-------|-------|----------|---------|
+| SPEC-20260307-004 | App Launching | SPEC | P1 | 2026-03-07 |
 
 ---
 
