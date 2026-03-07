@@ -18,6 +18,7 @@ extern void       vida_entry_clear(GtkWidget *entry);
 extern void       vida_entry_get_text(GtkWidget *entry, char *buf, int buflen);
 extern void       vida_results_clear(GtkWidget *box);
 extern void       vida_results_set_label(GtkWidget *box, const char *text);
+extern void       vida_results_set_ai_text(GtkWidget *box, const char *text);
 extern void       vida_results_append_text(GtkWidget *box, const char *text);
 extern void       vida_results_set_url(GtkWidget *box, const char *url);
 extern void       vida_results_set_apps(GtkWidget *box,
@@ -205,8 +206,6 @@ func streamAI(id, input, sock string) {
 		return
 	}
 
-	gtkIdle(func() { C.vida_results_set_label(gResults, C.CString("")) })
-
 	var accumulated strings.Builder
 	for {
 		msg, err := conn.Recv(30 * time.Second)
@@ -223,7 +222,7 @@ func streamAI(id, input, sock string) {
 		case "token":
 			accumulated.WriteString(msg.Value)
 			text := accumulated.String()
-			gtkIdle(func() { C.vida_results_set_label(gResults, C.CString(text)) })
+			gtkIdle(func() { C.vida_results_set_ai_text(gResults, C.CString(text)) })
 		case "done", "cancelled":
 			return
 		}
