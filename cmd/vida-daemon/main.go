@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -89,6 +90,7 @@ type daemon struct {
 	cfg      *config.Config
 	provider ai.AIProvider
 	rtr      *router.Router
+	appIndex *apps.Index
 	database *db.DB
 
 	// inflight tracks cancellable in-flight AI queries (TR-05a).
@@ -122,6 +124,7 @@ func (d *daemon) initDB() error {
 func (d *daemon) rebuildRouter() {
 	d.mu.RLock()
 	cfg := d.cfg
+	appIndex := d.appIndex
 	d.mu.RUnlock()
 
 	var providerName string
@@ -169,6 +172,9 @@ func (d *daemon) rebuildRouter() {
 	} else {
 		opts = append(opts, router.WithShortcuts(shortcuts.DefaultShortcuts()))
 	}
+	if appIndex != nil {
+		opts = append(opts, router.WithAppIndex(appIndex))
+	}
 	opts = append(opts, router.WithAIFunc(aiFunc))
 
 	d.mu.Lock()
@@ -184,8 +190,11 @@ func (d *daemon) indexApps() {
 		log.Printf("app indexing failed: %v", err)
 		return
 	}
-	log.Printf("vida-daemon: indexed apps from %v", dirs)
-	_ = idx
+	log.Printf("vida-daemon: indexed %d apps", idx.Len())
+	d.mu.Lock()
+	d.appIndex = idx
+	d.mu.Unlock()
+	d.rebuildRouter()
 }
 
 func (d *daemon) handleMessage(msg ipc.Message, reply ipc.ReplyFunc) {
@@ -260,6 +269,12 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 			resp.Value = result.CalcValue
 		case router.KindShortcut:
 			resp.URL = result.ShortcutURL
+		case router.KindAppList:
+			names := make([]string, len(result.Apps))
+			for i, a := range result.Apps {
+				names[i] = a.Name
+			}
+			resp.Message = strings.Join(names, "\n")
 		}
 		_ = reply(resp)
 	}

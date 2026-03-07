@@ -35,6 +35,9 @@ type searchItem struct {
 	appIdx int
 }
 
+// Len returns the number of indexed apps.
+func (idx *Index) Len() int { return len(idx.apps) }
+
 
 // DefaultDirs returns the standard XDG application directories.
 func DefaultDirs() []string {
