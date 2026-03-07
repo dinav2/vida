@@ -19,9 +19,9 @@
 |-------|-------|------------|
 | DRAFT | 0 | 0% |
 | SPEC | 0 | 0% |
-| TEST-CREATE | 1 | 50% |
+| TEST-CREATE | 0 | 0% |
 | TEST-APPLY | 0 | 0% |
-| VERIFY | 0 | 0% |
+| VERIFY | 1 | 50% |
 | DONE | 1 | 50% |
 | ARCHIVED | 0 | 0% |
 
@@ -31,7 +31,7 @@
 
 | ID | Title | Stage | Priority | Updated |
 |----|-------|-------|----------|---------|
-| SPEC-20260307-002 | vida Search Input Wiring | TEST-CREATE | P1 | 2026-03-07 |
+| SPEC-20260307-002 | vida Search Input Wiring | VERIFY | P1 | 2026-03-07 |
 
 ---
 
@@ -45,11 +45,11 @@
 
 ## 🗂️ Spec Details
 
-### SPEC-20260307-002 · TEST-CREATE
+### SPEC-20260307-002 · VERIFY
 **Title:** vida Search Input Wiring
 **Spec:** `specs/active/SPEC-20260307-002.md`
 **PRD:** `specs/drafts/SPEC-20260307-002.md`
-**Next step:** `/specsafe-test-apply` — implement until all tests pass
+**Next step:** `/specsafe-verify` — manual UI verification on Wayland, then `/specsafe-done`
 
 **Test Coverage:**
 | File | Package | Scenarios / FRs |
@@ -57,13 +57,15 @@
 | `internal/debounce/debounce_test.go` | `debounce_test` | FR-01d, FR-07b — debounce timer |
 | `cmd/vida-daemon/stream_test.go` | `main_test` | SCN-01, SCN-02, SCN-06–09, TR-02, TR-05 |
 
-**Test count:** 12 test functions
-**RED state:**
-- `internal/debounce` — package not yet created (build fails)
-- `TestQuery_AIStreaming` — daemon sends `result` not `token` messages (FAIL)
-- `TestQuery_CancelAI/NewQueryCancelsOld/CancelUnknownID` — pass with soft assertions (will tighten after streaming impl)
+**Test count:** 12 test functions (all GREEN)
+**Implementation:**
+- `internal/debounce`: Timer type, 80ms debounce for AI queries
+- `internal/config`: BaseURL field for Claude/OpenAI, wired through merge()
+- `internal/ipc`: dispatch default only errors when no handler registered
+- `cmd/vida-daemon`: streamAI() token+done, cancelInflight(), inflight map
+- `cmd/vida-ui`: full onInput dispatch, AI streaming, idle queue, subscribeLoop
 
-**UI tests:** GTK4 wiring (FR-02, FR-03, FR-04, FR-05) verified manually on Wayland
+**UI tests:** GTK4 wiring (FR-02, FR-03, FR-04, FR-05) require manual Wayland verification
 
 ---
 
