@@ -41,14 +41,16 @@ type AIConfig struct {
 
 // ClaudeConfig holds Anthropic-specific settings.
 type ClaudeConfig struct {
-	APIKey string `toml:"api_key"`
-	Model  string `toml:"model"`
+	APIKey  string `toml:"api_key"`
+	Model   string `toml:"model"`
+	BaseURL string `toml:"base_url"` // override for testing
 }
 
 // OpenAIConfig holds OpenAI-specific settings.
 type OpenAIConfig struct {
-	APIKey string `toml:"api_key"`
-	Model  string `toml:"model"`
+	APIKey  string `toml:"api_key"`
+	Model   string `toml:"model"`
+	BaseURL string `toml:"base_url"` // override for testing
 }
 
 // SearchConfig holds web search shortcut definitions.
@@ -139,11 +141,17 @@ func merge(cfg, raw *Config) {
 	if raw.AI.Claude.Model != "" {
 		cfg.AI.Claude.Model = raw.AI.Claude.Model
 	}
+	if raw.AI.Claude.BaseURL != "" {
+		cfg.AI.Claude.BaseURL = raw.AI.Claude.BaseURL
+	}
 	if raw.AI.OpenAI.APIKey != "" {
 		cfg.AI.OpenAI.APIKey = raw.AI.OpenAI.APIKey
 	}
 	if raw.AI.OpenAI.Model != "" {
 		cfg.AI.OpenAI.Model = raw.AI.OpenAI.Model
+	}
+	if raw.AI.OpenAI.BaseURL != "" {
+		cfg.AI.OpenAI.BaseURL = raw.AI.OpenAI.BaseURL
 	}
 
 	// UI

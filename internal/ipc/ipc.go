@@ -137,7 +137,10 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 }
 
-// dispatch applies built-in message handling.
+// dispatch applies built-in message handling for ping, subscribe, show, hide.
+// When no application handler is registered, unknown types receive an error
+// reply. When a handler is registered, it is authoritative for non-built-in
+// types and dispatch stays silent (avoids double-replies).
 func (s *Server) dispatch(msg Message, conn net.Conn, se *syncEnc, reply func(Message) error) {
 	switch msg.Type {
 	case "ping":
@@ -151,7 +154,9 @@ func (s *Server) dispatch(msg Message, conn net.Conn, se *syncEnc, reply func(Me
 		s.broadcast(Message{Type: msg.Type})
 		_ = reply(Message{Type: "ok"})
 	default:
-		_ = reply(Message{Type: "error", Message: "unknown type"})
+		if s.handler == nil {
+			_ = reply(Message{Type: "error", Message: "unknown type"})
+		}
 	}
 }
 

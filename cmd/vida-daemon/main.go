@@ -28,14 +28,12 @@ func main() {
 }
 
 func run() error {
-	// Determine config path
 	configPath := os.Getenv("VIDA_CONFIG")
 	if configPath == "" {
 		home, _ := os.UserHomeDir()
 		configPath = filepath.Join(home, ".config", "vida", "config.toml")
 	}
 
-	// Determine socket path
 	sockPath := os.Getenv("VIDA_SOCKET")
 	if sockPath == "" {
 		runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
@@ -49,6 +47,7 @@ func run() error {
 		configPath: configPath,
 		sockPath:   sockPath,
 		pid:        os.Getpid(),
+		inflight:   make(map[string]context.CancelFunc),
 	}
 
 	if err := d.loadConfig(); err != nil {
@@ -76,7 +75,6 @@ func run() error {
 	go srv.Serve(ctx)
 
 	log.Printf("vida-daemon: socket ready at %s (pid %d)", sockPath, d.pid)
-
 	<-ctx.Done()
 	log.Println("vida-daemon: shutting down")
 	return nil
@@ -92,6 +90,10 @@ type daemon struct {
 	provider ai.AIProvider
 	rtr      *router.Router
 	database *db.DB
+
+	// inflight tracks cancellable in-flight AI queries (TR-05a).
+	inflightMu sync.Mutex
+	inflight   map[string]context.CancelFunc
 }
 
 func (d *daemon) loadConfig() error {
@@ -134,17 +136,21 @@ func (d *daemon) rebuildRouter() {
 
 	switch providerName {
 	case "openai":
-		var apiKey string
+		apiKey := ""
+		baseURL := ""
 		if cfg != nil {
 			apiKey = cfg.EffectiveOpenAIKey()
+			baseURL = cfg.AI.OpenAI.BaseURL
 		}
-		provider = ai.NewOpenAIProvider(ai.OpenAIConfig{APIKey: apiKey})
+		provider = ai.NewOpenAIProvider(ai.OpenAIConfig{APIKey: apiKey, BaseURL: baseURL})
 	default: // "claude"
-		var apiKey string
+		apiKey := ""
+		baseURL := ""
 		if cfg != nil {
 			apiKey = cfg.EffectiveClaudeKey()
+			baseURL = cfg.AI.Claude.BaseURL
 		}
-		provider = ai.NewClaudeProvider(ai.ClaudeConfig{APIKey: apiKey})
+		provider = ai.NewClaudeProvider(ai.ClaudeConfig{APIKey: apiKey, BaseURL: baseURL})
 	}
 
 	var shortcutMap map[string]string
@@ -152,12 +158,8 @@ func (d *daemon) rebuildRouter() {
 		shortcutMap = cfg.Search.Shortcuts
 	}
 
+	// AI func is a placeholder for the router; actual streaming is done in handleQuery.
 	aiFunc := func(ctx context.Context, input string) router.Result {
-		ch, err := provider.Query(ctx, input, nil)
-		if err != nil {
-			return router.Result{Kind: router.KindAIStream}
-		}
-		_ = ch
 		return router.Result{Kind: router.KindAIStream}
 	}
 
@@ -182,9 +184,6 @@ func (d *daemon) indexApps() {
 		log.Printf("app indexing failed: %v", err)
 		return
 	}
-	d.mu.Lock()
-	// Rebuild router with app index
-	d.mu.Unlock()
 	log.Printf("vida-daemon: indexed apps from %v", dirs)
 	_ = idx
 }
@@ -213,27 +212,101 @@ func (d *daemon) handleMessage(msg ipc.Message, reply ipc.ReplyFunc) {
 		_ = reply(ipc.Message{Type: "ok"})
 	case "query":
 		d.handleQuery(msg, reply)
+	case "cancel":
+		d.cancelInflight(msg.ID)
+		_ = reply(ipc.Message{Type: "ok", ID: msg.ID})
+	}
+}
+
+// cancelInflight cancels the in-flight AI query with the given ID (TR-05b).
+func (d *daemon) cancelInflight(id string) {
+	if id == "" {
+		return
+	}
+	d.inflightMu.Lock()
+	cancel, ok := d.inflight[id]
+	if ok {
+		delete(d.inflight, id)
+	}
+	d.inflightMu.Unlock()
+	if ok {
+		cancel()
 	}
 }
 
 func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 	d.mu.RLock()
 	rtr := d.rtr
+	provider := d.provider
 	d.mu.RUnlock()
+
+	// Cancel any previous in-flight query with the same ID (FR-06d).
+	d.cancelInflight(msg.ID)
 
 	ctx := context.Background()
 	result := rtr.Route(ctx, msg.Input)
 
-	resp := ipc.Message{
-		Type: "result",
-		ID:   msg.ID,
-		Kind: string(result.Kind),
-	}
 	switch result.Kind {
-	case router.KindCalc:
-		resp.Value = result.CalcValue
-	case router.KindShortcut:
-		resp.URL = result.ShortcutURL
+	case router.KindAIStream:
+		d.streamAI(msg.ID, msg.Input, provider, reply)
+	default:
+		resp := ipc.Message{
+			Type: "result",
+			ID:   msg.ID,
+			Kind: string(result.Kind),
+		}
+		switch result.Kind {
+		case router.KindCalc:
+			resp.Value = result.CalcValue
+		case router.KindShortcut:
+			resp.URL = result.ShortcutURL
+		}
+		_ = reply(resp)
 	}
-	_ = reply(resp)
+}
+
+// streamAI calls the AI provider and sends token+done messages over reply (TR-02c).
+func (d *daemon) streamAI(id, input string, provider ai.AIProvider, reply ipc.ReplyFunc) {
+	if provider == nil {
+		_ = reply(ipc.Message{Type: "done", ID: id})
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Register for external cancellation (TR-05a).
+	d.inflightMu.Lock()
+	d.inflight[id] = cancel
+	d.inflightMu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			d.inflightMu.Lock()
+			delete(d.inflight, id)
+			d.inflightMu.Unlock()
+		}()
+
+		ch, err := provider.Query(ctx, input, nil)
+		if err != nil {
+			_ = reply(ipc.Message{Type: "done", ID: id})
+			return
+		}
+
+		for tok := range ch {
+			if ctx.Err() != nil {
+				_ = reply(ipc.Message{Type: "cancelled", ID: id})
+				return
+			}
+			if tok.Error != nil {
+				_ = reply(ipc.Message{Type: "done", ID: id})
+				return
+			}
+			if tok.Done {
+				break
+			}
+			_ = reply(ipc.Message{Type: "token", ID: id, Value: tok.Text})
+		}
+		_ = reply(ipc.Message{Type: "done", ID: id})
+	}()
 }
