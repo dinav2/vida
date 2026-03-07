@@ -9,7 +9,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Total Specs | 2 |
+| Total Specs | 3 |
 | Completion Rate | 50% |
 | Avg Cycle Time | 2 days |
 
@@ -22,14 +22,17 @@
 | TEST-CREATE | 0 | 0% |
 | TEST-APPLY | 0 | 0% |
 | VERIFY | 0 | 0% |
-| DONE | 2 | 100% |
+| SPEC | 1 | 33% |
+| DONE | 2 | 67% |
 | ARCHIVED | 0 | 0% |
 
 ---
 
 ## 📋 Active Specs
 
-None — all specs complete.
+| ID | Title | Stage | Priority | Updated |
+|----|-------|-------|----------|---------|
+| SPEC-20260307-003 | vida UI Styling — Mac-Style Launcher | SPEC | P1 | 2026-03-07 |
 
 ---
 
@@ -44,6 +47,26 @@ None — all specs complete.
 
 ## 🗂️ Spec Details
 
+
+---
+
+---
+
+## 🗂️ Spec Details
+
+### SPEC-20260307-003 · SPEC
+**Title:** vida UI Styling — Mac-Style Launcher
+**Spec:** `specs/active/SPEC-20260307-003.md`
+**PRD:** `specs/drafts/SPEC-20260307-003.md`
+**Next step:** `/specsafe-test-create` — write visual/structural tests, then implement CSS + layout
+
+**Key requirements:**
+- Dark semi-transparent rounded panel (16px radius)
+- Transparent GTK window (compositor handles alpha)
+- Centered, ~30% from top, 640px wide
+- Large entry font (20px), no visible border
+- Result rows with type labels (Calculator / App / Web) right-aligned
+- Hover highlight on result rows
 
 ---
 
