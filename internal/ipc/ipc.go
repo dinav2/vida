@@ -20,6 +20,13 @@ type Message struct {
 	Message string `json:"message,omitempty"`
 	ID      string `json:"id,omitempty"`
 	Input   string `json:"input,omitempty"`
+
+	// Extended fields used by specific response types.
+	PID      int    `json:"pid,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Value    string `json:"value,omitempty"`
+	URL      string `json:"url,omitempty"`
 }
 
 // ReplyFunc sends a reply message to the connected client.

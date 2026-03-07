@@ -49,6 +49,15 @@ func NewWithOverrides(base, overrides map[string]string) *Handler {
 	return &Handler{shortcuts: merged}
 }
 
+// DefaultShortcuts returns a copy of the built-in shortcut map.
+func DefaultShortcuts() map[string]string {
+	cp := make(map[string]string, len(defaults))
+	for k, v := range defaults {
+		cp[k] = v
+	}
+	return cp
+}
+
 // Resolve checks whether input matches a shortcut prefix and, if so,
 // returns the expanded URL and true. Returns ("", false) when:
 //   - No space is present in input (bare prefix, no query).

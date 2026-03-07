@@ -36,6 +36,15 @@ type searchItem struct {
 }
 
 
+// DefaultDirs returns the standard XDG application directories.
+func DefaultDirs() []string {
+	return []string{
+		"/usr/share/applications",
+		"/usr/local/share/applications",
+		os.Getenv("HOME") + "/.local/share/applications",
+	}
+}
+
 // BuildIndex scans dirs for .desktop files and returns a populated Index.
 // Directories that don't exist are silently skipped (FR-06a).
 func BuildIndex(dirs []string) (*Index, error) {

@@ -1,0 +1,37 @@
+# Binaries (compiled outputs at root, not the cmd/ subdirectories)
+/vida
+/vida-daemon
+/vida-ui
+bin/vida
+bin/vida-daemon
+bin/vida-ui
+
+# Build output
+bin/
+dist/
+
+# Go
+*.test
+*.out
+vendor/
+
+# Config with secrets (never commit API keys)
+config.toml
+*.local.toml
+
+# Runtime / data
+*.db
+*.db-wal
+*.db-shm
+*.sock
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
