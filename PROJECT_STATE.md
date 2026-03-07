@@ -21,17 +21,15 @@
 | SPEC | 0 | 0% |
 | TEST-CREATE | 0 | 0% |
 | TEST-APPLY | 0 | 0% |
-| VERIFY | 1 | 50% |
-| DONE | 1 | 50% |
+| VERIFY | 0 | 0% |
+| DONE | 2 | 100% |
 | ARCHIVED | 0 | 0% |
 
 ---
 
 ## 📋 Active Specs
 
-| ID | Title | Stage | Priority | Updated |
-|----|-------|-------|----------|---------|
-| SPEC-20260307-002 | vida Search Input Wiring | VERIFY | P1 | 2026-03-07 |
+None — all specs complete.
 
 ---
 
@@ -40,32 +38,12 @@
 | ID | Title | Completed | Tests |
 |----|-------|-----------|-------|
 | SPEC-20260305-001 | vida — AI-Native Command Palette for Wayland (MVP Core) | 2026-03-07 | 75 pass, 1 skip |
+| SPEC-20260307-002 | vida Search Input Wiring | 2026-03-07 | 12 pass |
 
 ---
 
 ## 🗂️ Spec Details
 
-### SPEC-20260307-002 · VERIFY
-**Title:** vida Search Input Wiring
-**Spec:** `specs/active/SPEC-20260307-002.md`
-**PRD:** `specs/drafts/SPEC-20260307-002.md`
-**Next step:** `/specsafe-verify` — manual UI verification on Wayland, then `/specsafe-done`
-
-**Test Coverage:**
-| File | Package | Scenarios / FRs |
-|------|---------|-----------------|
-| `internal/debounce/debounce_test.go` | `debounce_test` | FR-01d, FR-07b — debounce timer |
-| `cmd/vida-daemon/stream_test.go` | `main_test` | SCN-01, SCN-02, SCN-06–09, TR-02, TR-05 |
-
-**Test count:** 12 test functions (all GREEN)
-**Implementation:**
-- `internal/debounce`: Timer type, 80ms debounce for AI queries
-- `internal/config`: BaseURL field for Claude/OpenAI, wired through merge()
-- `internal/ipc`: dispatch default only errors when no handler registered
-- `cmd/vida-daemon`: streamAI() token+done, cancelInflight(), inflight map
-- `cmd/vida-ui`: full onInput dispatch, AI streaming, idle queue, subscribeLoop
-
-**UI tests:** GTK4 wiring (FR-02, FR-03, FR-04, FR-05) require manual Wayland verification
 
 ---
 
