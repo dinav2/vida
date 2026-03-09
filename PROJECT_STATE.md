@@ -1,7 +1,7 @@
 # vida - Project State
 
 **Version:** 1.0.0
-**Last Updated:** 2026-03-07
+**Last Updated:** 2026-03-08
 
 ---
 
@@ -9,7 +9,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Total Specs | 4 |
+| Total Specs | 5 |
 | Completion Rate | 100% |
 | Avg Cycle Time | 2 days |
 
@@ -22,7 +22,7 @@
 | TEST-CREATE | 0 | 0% |
 | TEST-APPLY | 0 | 0% |
 | VERIFY | 0 | 0% |
-| DONE | 4 | 100% |
+| DONE | 5 | 100% |
 | ARCHIVED | 0 | 0% |
 
 ---
@@ -41,6 +41,7 @@ None
 | SPEC-20260307-002 | vida Search Input Wiring | 2026-03-07 | 12 pass |
 | SPEC-20260307-003 | vida UI Styling — Mac-Style Launcher | 2026-03-07 | 12 pass |
 | SPEC-20260307-004 | App Launching | 2026-03-07 | 19 pass |
+| SPEC-20260308-005 | App Icons in Launcher Results | 2026-03-08 | 12 pass |
 
 ---
 
