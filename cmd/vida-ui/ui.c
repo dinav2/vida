@@ -113,7 +113,7 @@ static const char *VIDA_CSS =
     "  border: none;"
     "  border-radius: 8px;"
     "  padding: 0;"
-    "  min-height: 44px;"
+    "  min-height: 56px;"
     "}"
     ".vida-row:hover {"
     "  background: rgba(255, 255, 255, 0.07);"
@@ -146,6 +146,12 @@ static const char *VIDA_CSS =
     "  font-size: 12px;"
     "  color: rgba(255, 255, 255, 0.4);"
     "  padding: 0 12px;"
+    "}"
+
+    /* App icon in launcher rows */
+    ".vida-app-icon {"
+    "  border-radius: 6px;"
+    "  margin: 0 8px 0 12px;"
     "}"
 
     /* Open URL button */
@@ -394,12 +400,53 @@ void vida_results_set_url(GtkWidget *box, const char *url) {
     set_separator_visible(box, TRUE);
 }
 
-/* Show a list of app name rows. */
-void vida_results_set_apps(GtkWidget *box, const char **names, int n) {
+/* make_app_row creates a result row with a 48px app icon and app name. */
+static GtkWidget *make_app_row(const char *name, const char *icon_name) {
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "vida-row");
+    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(hbox, TRUE);
+    gtk_widget_set_valign(hbox, GTK_ALIGN_CENTER);
+
+    /* Icon */
+    GtkWidget *img;
+    const char *resolved = (icon_name && *icon_name) ? icon_name
+                                                      : "application-x-executable-symbolic";
+    GIcon *gicon = g_themed_icon_new(resolved);
+    img = gtk_image_new_from_gicon(gicon);
+    g_object_unref(gicon);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), 48);
+    gtk_widget_add_css_class(img, "vida-app-icon");
+    gtk_box_append(GTK_BOX(hbox), img);
+
+    /* App name */
+    GtkWidget *lbl = gtk_label_new(name);
+    gtk_widget_add_css_class(lbl, "vida-row-label");
+    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_box_append(GTK_BOX(hbox), lbl);
+
+    /* Type badge */
+    GtkWidget *type_lbl = gtk_label_new("App");
+    gtk_widget_add_css_class(type_lbl, "vida-row-type");
+    gtk_label_set_xalign(GTK_LABEL(type_lbl), 1.0f);
+    gtk_box_append(GTK_BOX(hbox), type_lbl);
+
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+    return btn;
+}
+
+/* Show a list of app rows with icons. */
+void vida_results_set_apps(GtkWidget *box, const char **names,
+                            const char **icons, int n) {
     vida_results_clear(box);
     for (int i = 0; i < n && i < 6; i++) {
         if (!names[i] || !*names[i]) continue;
-        GtkWidget *row = make_row(names[i], "App");
+        const char *icon = (icons && icons[i]) ? icons[i] : "";
+        GtkWidget *row = make_app_row(names[i], icon);
         gtk_box_append(GTK_BOX(box), row);
     }
     if (n > 0) set_separator_visible(box, TRUE);

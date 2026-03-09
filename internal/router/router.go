@@ -26,6 +26,7 @@ const (
 type AppEntry struct {
 	ID    string
 	Name  string
+	Icon  string
 	Exec  string
 	Score float64
 }
@@ -131,7 +132,7 @@ func (r *Router) Route(ctx context.Context, input string) Result {
 		if len(matched) > 0 {
 			entries := make([]AppEntry, len(matched))
 			for i, a := range matched {
-				entries[i] = AppEntry{ID: a.ID, Name: a.Name, Exec: a.Exec}
+				entries[i] = AppEntry{ID: a.ID, Name: a.Name, Icon: a.Icon, Exec: a.Exec}
 			}
 			return Result{Kind: KindAppList, Apps: entries}
 		}

@@ -22,7 +22,7 @@ extern void       vida_results_set_ai_text(GtkWidget *box, const char *text);
 extern void       vida_results_append_text(GtkWidget *box, const char *text);
 extern void       vida_results_set_url(GtkWidget *box, const char *url);
 extern void       vida_results_set_apps(GtkWidget *box,
-                                        const char **names, int n);
+                                        const char **names, const char **icons, int n);
 extern void       vida_grab_focus(GtkWidget *entry);
 extern void       vida_select_row(GtkWidget *box, int idx);
 extern int        vida_count_rows(GtkWidget *box);
@@ -233,17 +233,25 @@ func onInput(text string) {
 			names := strings.Split(resp.Message, "\n")
 			ids := strings.Split(resp.IDs, "\n")
 			execs := strings.Split(resp.Exec, "\n")
+			Icons := strings.Split(resp.Icons, "\n")
 			gtkIdle(func() {
 				currentKind = "app_list"
 				currentAppIDs = ids
 				currentAppExecs = execs
 				selectedIdx = -1
 				cnames := make([]*C.char, len(names))
+				cicons := make([]*C.char, len(names))
 				for i, n := range names {
 					cnames[i] = C.CString(n)
 					defer C.free(unsafe.Pointer(cnames[i]))
+					icon := ""
+					if i < len(Icons) {
+						icon = Icons[i]
+					}
+					cicons[i] = C.CString(icon)
+					defer C.free(unsafe.Pointer(cicons[i]))
 				}
-				C.vida_results_set_apps(gResults, &cnames[0], C.int(len(cnames)))
+				C.vida_results_set_apps(gResults, &cnames[0], &cicons[0], C.int(len(cnames)))
 			})
 		case "ai_stream":
 			gtkIdle(func() {
