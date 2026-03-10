@@ -8,6 +8,7 @@ import (
 
 	"github.com/dinav2/vida/internal/apps"
 	"github.com/dinav2/vida/internal/calc"
+	"github.com/dinav2/vida/internal/convert"
 	"github.com/dinav2/vida/internal/shortcuts"
 )
 
@@ -17,6 +18,7 @@ type Kind string
 const (
 	KindEmpty       Kind = "empty"
 	KindCalc        Kind = "calc"
+	KindConvert     Kind = "convert"
 	KindShortcut    Kind = "shortcut"
 	KindAppList     Kind = "app_list"
 	KindAIStream    Kind = "ai_stream"
@@ -122,7 +124,14 @@ func (r *Router) Route(ctx context.Context, input string) Result {
 		return Result{Kind: KindCommandList, CommandQuery: query}
 	}
 
-	// 1. Calc (highest priority)
+	// 1. Unit conversion (before calc — detects patterns like "5 cm to in")
+	if convert.IsConversion(input) {
+		if result, ok := convert.Convert(input); ok {
+			return Result{Kind: KindConvert, CalcValue: result}
+		}
+	}
+
+	// 2. Calc
 	if calc.IsExpression(input) {
 		val, err := calc.Eval(input)
 		if err == nil {
@@ -130,14 +139,14 @@ func (r *Router) Route(ctx context.Context, input string) Result {
 		}
 	}
 
-	// 2. Shortcuts
+	// 3. Shortcuts
 	if r.shortcutHandler != nil {
 		if url, ok := r.shortcutHandler.Resolve(input); ok {
 			return Result{Kind: KindShortcut, ShortcutURL: url}
 		}
 	}
 
-	// 3. App search
+	// 4. App search
 	if r.appIndex != nil {
 		matched := r.appIndex.Search(input, 10)
 		if len(matched) > 0 {

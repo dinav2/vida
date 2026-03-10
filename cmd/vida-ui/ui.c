@@ -362,15 +362,23 @@ static GtkWidget *make_row(const char *text, const char *type_label) {
     return btn;
 }
 
-/* Show a single text label (calc result or AI streaming text). */
-void vida_results_set_label(GtkWidget *box, const char *text) {
+/* Show a single text label with a given badge. */
+static void results_set_label_badge(GtkWidget *box, const char *text, const char *badge) {
     vida_results_clear(box);
     if (!text || !*text) return;
-
-    GtkWidget *btn = make_row(text, "Calculator");
-    /* Make AI/calc rows selectable — override with plain label for AI */
+    GtkWidget *btn = make_row(text, badge);
     gtk_box_append(GTK_BOX(box), btn);
     set_separator_visible(box, TRUE);
+}
+
+/* Show a single text label (calc result). */
+void vida_results_set_label(GtkWidget *box, const char *text) {
+    results_set_label_badge(box, text, "Calculator");
+}
+
+/* Show a unit conversion result with a Convert badge. */
+void vida_results_set_convert(GtkWidget *box, const char *text) {
+    results_set_label_badge(box, text, "Convert");
 }
 
 /* Show AI streaming text — word-wrapped, with a small "AI" badge below. */

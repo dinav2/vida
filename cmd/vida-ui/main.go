@@ -18,6 +18,7 @@ extern void       vida_entry_clear(GtkWidget *entry);
 extern void       vida_entry_get_text(GtkWidget *entry, char *buf, int buflen);
 extern void       vida_results_clear(GtkWidget *box);
 extern void       vida_results_set_label(GtkWidget *box, const char *text);
+extern void       vida_results_set_convert(GtkWidget *box, const char *text);
 extern void       vida_results_set_ai_text(GtkWidget *box, const char *text);
 extern void       vida_results_append_text(GtkWidget *box, const char *text);
 extern void       vida_results_set_url(GtkWidget *box, const char *url);
@@ -201,7 +202,7 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 				C.free(unsafe.Pointer(cid))
 				C.vida_hide(win)
 			}
-		case "calc":
+		case "calc", "convert":
 			cv := C.CString(currentCalcValue)
 			C.vida_copy_to_clipboard(gEntry, cv)
 			C.free(unsafe.Pointer(cv))
@@ -277,6 +278,10 @@ func onInput(text string) {
 		if err != nil {
 			return
 		}
+		// Discard stale responses — a newer query has already been issued.
+		if querySeq.Load() != seq {
+			return
+		}
 
 		switch resp.Kind {
 		case "command_list":
@@ -318,6 +323,15 @@ func onInput(text string) {
 				currentResultText = val
 				selectedIdx = -1
 				C.vida_results_set_label(gResults, C.CString(val))
+			})
+		case "convert":
+			val := resp.Value
+			gtkIdle(func() {
+				currentKind = "convert"
+				currentCalcValue = val
+				currentResultText = val
+				selectedIdx = -1
+				C.vida_results_set_convert(gResults, C.CString(val))
 			})
 		case "shortcut":
 			url := resp.URL

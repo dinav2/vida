@@ -315,7 +315,7 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 			Kind: string(result.Kind),
 		}
 		switch result.Kind {
-		case router.KindCalc:
+		case router.KindCalc, router.KindConvert:
 			resp.Value = result.CalcValue
 		case router.KindShortcut:
 			resp.URL = result.ShortcutURL
