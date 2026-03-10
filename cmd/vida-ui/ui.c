@@ -148,6 +148,32 @@ static const char *VIDA_CSS =
     "  padding: 0 12px;"
     "}"
 
+    /* Command rows */
+    ".vida-cmd-name {"
+    "  font-family: 'Inter', system-ui, sans-serif;"
+    "  font-size: 14px;"
+    "  font-weight: 600;"
+    "  color: #ffffff;"
+    "  padding: 0 4px;"
+    "}"
+    ".vida-cmd-desc {"
+    "  font-family: 'Inter', system-ui, sans-serif;"
+    "  font-size: 12px;"
+    "  color: rgba(255, 255, 255, 0.45);"
+    "  padding: 0 4px;"
+    "}"
+
+    /* HUD "Copied" indicator */
+    ".vida-hud {"
+    "  font-family: 'Inter', system-ui, sans-serif;"
+    "  font-size: 13px;"
+    "  color: rgba(255, 255, 255, 0.7);"
+    "  background: rgba(255, 255, 255, 0.1);"
+    "  border-radius: 6px;"
+    "  padding: 4px 12px;"
+    "  margin: 4px 8px;"
+    "}"
+
     /* App icon in launcher rows */
     ".vida-app-icon {"
     "  border-radius: 6px;"
@@ -323,6 +349,8 @@ static GtkWidget *make_row(const char *text, const char *type_label) {
     gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
     gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
     gtk_widget_set_hexpand(lbl, TRUE);
+    /* Allow label to shrink below its natural width so panel stays at fixed size. */
+    gtk_widget_set_size_request(lbl, 0, -1);
 
     GtkWidget *type_lbl = gtk_label_new(type_label);
     gtk_widget_add_css_class(type_lbl, "vida-row-type");
@@ -345,12 +373,34 @@ void vida_results_set_label(GtkWidget *box, const char *text) {
     set_separator_visible(box, TRUE);
 }
 
-/* Show AI streaming text with "AI" type label. */
+/* Show AI streaming text — word-wrapped, with a small "AI" badge below. */
 void vida_results_set_ai_text(GtkWidget *box, const char *text) {
     vida_results_clear(box);
     if (!text || !*text) return;
-    GtkWidget *btn = make_row(text, "AI");
-    gtk_box_append(GTK_BOX(box), btn);
+
+    GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_add_css_class(outer, "vida-row");
+    gtk_widget_set_hexpand(outer, TRUE);
+    gtk_widget_set_size_request(outer, 0, -1);
+
+    GtkWidget *lbl = gtk_label_new(text);
+    gtk_widget_add_css_class(lbl, "vida-row-label");
+    gtk_label_set_wrap(GTK_LABEL(lbl), TRUE);
+    gtk_label_set_wrap_mode(GTK_LABEL(lbl), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+    gtk_label_set_yalign(GTK_LABEL(lbl), 0.0f);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    /* Suppress natural width so the label wraps within the panel instead of
+     * driving the panel wider. hexpand fills the allocated 680px normally. */
+    gtk_label_set_max_width_chars(GTK_LABEL(lbl), 1);
+    gtk_box_append(GTK_BOX(outer), lbl);
+
+    GtkWidget *badge = gtk_label_new("AI");
+    gtk_widget_add_css_class(badge, "vida-row-type");
+    gtk_label_set_xalign(GTK_LABEL(badge), 1.0f);
+    gtk_box_append(GTK_BOX(outer), badge);
+
+    gtk_box_append(GTK_BOX(box), outer);
     set_separator_visible(box, TRUE);
 }
 
@@ -489,6 +539,82 @@ void vida_launch_app(const char *desktop_id) {
     if (err) g_error_free(err);
     g_object_unref(ctx);
     g_object_unref(info);
+}
+
+/* make_cmd_row creates a command result row with a 32px icon, bold name, and muted desc. */
+static GtkWidget *make_cmd_row(const char *name, const char *desc, const char *icon_name) {
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "vida-row");
+    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(hbox, TRUE);
+    gtk_widget_set_valign(hbox, GTK_ALIGN_CENTER);
+
+    /* 32px icon */
+    const char *resolved = (icon_name && *icon_name) ? icon_name : "system-run-symbolic";
+    GIcon *gicon = g_themed_icon_new(resolved);
+    GtkWidget *img = gtk_image_new_from_gicon(gicon);
+    g_object_unref(gicon);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), 32);
+    gtk_widget_add_css_class(img, "vida-app-icon");
+    gtk_box_append(GTK_BOX(hbox), img);
+
+    /* Name + desc stacked vertically */
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_hexpand(vbox, TRUE);
+    gtk_widget_set_valign(vbox, GTK_ALIGN_CENTER);
+
+    GtkWidget *name_lbl = gtk_label_new(name);
+    gtk_widget_add_css_class(name_lbl, "vida-cmd-name");
+    gtk_label_set_xalign(GTK_LABEL(name_lbl), 0.0f);
+    gtk_box_append(GTK_BOX(vbox), name_lbl);
+
+    if (desc && *desc) {
+        GtkWidget *desc_lbl = gtk_label_new(desc);
+        gtk_widget_add_css_class(desc_lbl, "vida-cmd-desc");
+        gtk_label_set_xalign(GTK_LABEL(desc_lbl), 0.0f);
+        gtk_label_set_ellipsize(GTK_LABEL(desc_lbl), PANGO_ELLIPSIZE_END);
+        gtk_box_append(GTK_BOX(vbox), desc_lbl);
+    }
+
+    gtk_box_append(GTK_BOX(hbox), vbox);
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+    return btn;
+}
+
+/* Show a filtered list of command rows. */
+void vida_results_set_commands(GtkWidget *box, const char **names,
+                                const char **descs, const char **icons, int n) {
+    vida_results_clear(box);
+    if (n == 0) {
+        GtkWidget *row = make_row("No commands match", "");
+        gtk_box_append(GTK_BOX(box), row);
+        set_separator_visible(box, TRUE);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!names[i] || !*names[i]) continue;
+        const char *desc = (descs && descs[i]) ? descs[i] : "";
+        const char *icon = (icons && icons[i]) ? icons[i] : "";
+        GtkWidget *row = make_cmd_row(names[i], desc, icon);
+        gtk_box_append(GTK_BOX(box), row);
+    }
+    set_separator_visible(box, TRUE);
+}
+
+/* Show a brief "Copied" HUD label in the results area for 1.5 seconds. */
+void vida_show_copied_hud(GtkWidget *box) {
+    GtkWidget *lbl = gtk_label_new("Copied");
+    gtk_widget_add_css_class(lbl, "vida-hud");
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.5f);
+    gtk_box_append(GTK_BOX(box), lbl);
+    set_separator_visible(box, TRUE);
+}
+
+/* Set the entry placeholder text (used when switching modes). */
+void vida_entry_set_placeholder(GtkWidget *entry, const char *text) {
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), text);
 }
 
 /* Copy text to the system clipboard. */

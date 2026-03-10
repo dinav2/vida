@@ -13,8 +13,14 @@ import (
 	"sync"
 	"syscall"
 
+	"bytes"
+	"encoding/json"
+	"os/exec"
+	"time"
+
 	"github.com/dinav2/vida/internal/ai"
 	"github.com/dinav2/vida/internal/apps"
+	"github.com/dinav2/vida/internal/commands"
 	"github.com/dinav2/vida/internal/config"
 	"github.com/dinav2/vida/internal/db"
 	"github.com/dinav2/vida/internal/ipc"
@@ -59,6 +65,13 @@ func run() error {
 	}
 	defer d.database.Close()
 
+	// Ensure registry is initialised even if loadConfig fails.
+	d.mu.Lock()
+	if d.cmdRegistry == nil {
+		d.cmdRegistry = commands.NewRegistry(nil)
+	}
+	d.mu.Unlock()
+
 	d.rebuildRouter()
 	go d.indexApps()
 
@@ -86,12 +99,13 @@ type daemon struct {
 	sockPath   string
 	pid        int
 
-	mu       sync.RWMutex
-	cfg      *config.Config
-	provider ai.AIProvider
-	rtr      *router.Router
-	appIndex *apps.Index
-	database *db.DB
+	mu          sync.RWMutex
+	cfg         *config.Config
+	provider    ai.AIProvider
+	rtr         *router.Router
+	appIndex    *apps.Index
+	database    *db.DB
+	cmdRegistry *commands.Registry
 
 	// inflight tracks cancellable in-flight AI queries (TR-05a).
 	inflightMu sync.Mutex
@@ -105,6 +119,7 @@ func (d *daemon) loadConfig() error {
 	}
 	d.mu.Lock()
 	d.cfg = cfg
+	d.cmdRegistry = commands.NewRegistry(&cfg.Commands)
 	d.mu.Unlock()
 	return nil
 }
@@ -224,6 +239,8 @@ func (d *daemon) handleMessage(msg ipc.Message, reply ipc.ReplyFunc) {
 		_ = reply(ipc.Message{Type: "ok"})
 	case "query":
 		d.handleQuery(msg, reply)
+	case "run_command":
+		d.handleRunCommand(msg, reply)
 	case "cancel":
 		d.cancelInflight(msg.ID)
 		_ = reply(ipc.Message{Type: "ok", ID: msg.ID})
@@ -261,6 +278,36 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 	switch result.Kind {
 	case router.KindAIStream:
 		d.streamAI(msg.ID, msg.Input, provider, reply)
+	case router.KindCommandList:
+		d.mu.RLock()
+		reg := d.cmdRegistry
+		d.mu.RUnlock()
+		if reg == nil {
+			reg = commands.NewRegistry(nil)
+		}
+		// Only filter by the first word; rest is the command's argument input.
+		filterQuery := result.CommandQuery
+		if i := strings.IndexByte(filterQuery, ' '); i >= 0 {
+			filterQuery = filterQuery[:i]
+		}
+		matched := reg.Filter(filterQuery)
+		type cmdJSON struct {
+			Name string `json:"name"`
+			Desc string `json:"desc"`
+			Icon string `json:"icon"`
+			Kind string `json:"kind"`
+		}
+		items := make([]cmdJSON, len(matched))
+		for i, c := range matched {
+			items[i] = cmdJSON{Name: c.Name, Desc: c.Desc, Icon: c.Icon, Kind: c.Kind}
+		}
+		b, _ := json.Marshal(items)
+		_ = reply(ipc.Message{
+			Type:    "result",
+			ID:      msg.ID,
+			Kind:    "command_list",
+			Message: string(b),
+		})
 	default:
 		resp := ipc.Message{
 			Type: "result",
@@ -290,6 +337,71 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 		}
 		_ = reply(resp)
 	}
+}
+
+// handleRunCommand executes a named command and replies with the appropriate message.
+func (d *daemon) handleRunCommand(msg ipc.Message, reply ipc.ReplyFunc) {
+	d.mu.RLock()
+	reg := d.cmdRegistry
+	provider := d.provider
+	d.mu.RUnlock()
+
+	if reg == nil {
+		reg = commands.NewRegistry(nil)
+	}
+
+	cmd, ok := reg.Get(msg.Name)
+	if !ok {
+		_ = reply(ipc.Message{Type: "command_error", ID: msg.ID, Message: "unknown command: " + msg.Name})
+		return
+	}
+
+	// reload-vida: send an internal reload instead of running a shell command.
+	if msg.Name == "reload-vida" {
+		if err := d.loadConfig(); err != nil {
+			log.Printf("reload-vida: config error: %v", err)
+		}
+		d.rebuildRouter()
+		_ = reply(ipc.Message{Type: "command_done", ID: msg.ID})
+		return
+	}
+
+	// AI commands: stream via provider with injected system prompt.
+	if cmd.Kind == commands.KindAI {
+		input := cmd.SystemPrompt + "\n\n" + msg.Input
+		d.streamAI(msg.ID, input, provider, reply)
+		return
+	}
+
+	// Shell commands.
+	execStr := commands.ExpandInput(cmd.Exec, msg.Input)
+
+	if cmd.Output == "none" {
+		// Fire and forget.
+		c := exec.Command("sh", "-c", execStr)
+		_ = c.Start()
+		_ = reply(ipc.Message{Type: "command_done", ID: msg.ID})
+		return
+	}
+
+	// output=palette: capture stdout, timeout 10s.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, "sh", "-c", execStr)
+	var stdout, stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	err := c.Run()
+	if err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		_ = reply(ipc.Message{Type: "command_error", ID: msg.ID, Message: errMsg})
+		return
+	}
+	out := strings.TrimSpace(stdout.String())
+	_ = reply(ipc.Message{Type: "command_result", ID: msg.ID, Value: out})
 }
 
 // streamAI calls the AI provider and sends token+done messages over reply (TR-02c).

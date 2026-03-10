@@ -4,6 +4,7 @@ package router
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dinav2/vida/internal/apps"
 	"github.com/dinav2/vida/internal/calc"
@@ -14,12 +15,13 @@ import (
 type Kind string
 
 const (
-	KindEmpty     Kind = "empty"
-	KindCalc      Kind = "calc"
-	KindShortcut  Kind = "shortcut"
-	KindAppList   Kind = "app_list"
-	KindAIStream  Kind = "ai_stream"
-	KindCancelled Kind = "cancelled"
+	KindEmpty       Kind = "empty"
+	KindCalc        Kind = "calc"
+	KindShortcut    Kind = "shortcut"
+	KindAppList     Kind = "app_list"
+	KindAIStream    Kind = "ai_stream"
+	KindCancelled   Kind = "cancelled"
+	KindCommandList Kind = "command_list"
 )
 
 // AppEntry is a simplified app result used for testing and dependency injection.
@@ -43,6 +45,9 @@ type Result struct {
 
 	// App results
 	Apps []AppEntry
+
+	// Command list result
+	CommandQuery string // text after ":", used for filtering
 
 	// AI result channel (non-nil when Kind == KindAIStream)
 	AIFunc func(context.Context, string) Result
@@ -109,6 +114,12 @@ func (r *Router) Route(ctx context.Context, input string) Result {
 	// FR-04d: empty input
 	if input == "" {
 		return Result{Kind: KindEmpty}
+	}
+
+	// 0. Command mode — ":" prefix, highest priority (FR-01a)
+	if strings.HasPrefix(input, ":") {
+		query := strings.TrimPrefix(input, ":")
+		return Result{Kind: KindCommandList, CommandQuery: query}
 	}
 
 	// 1. Calc (highest priority)

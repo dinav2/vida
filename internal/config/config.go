@@ -27,9 +27,30 @@ var defaultShortcuts = map[string]string{
 
 // Config is the top-level configuration structure.
 type Config struct {
-	AI     AIConfig     `toml:"ai"`
-	Search SearchConfig `toml:"search"`
-	UI     UIConfig     `toml:"ui"`
+	AI       AIConfig       `toml:"ai"`
+	Search   SearchConfig   `toml:"search"`
+	UI       UIConfig       `toml:"ui"`
+	Commands CommandsConfig `toml:"commands"`
+}
+
+// CommandsConfig holds built-in overrides and user-defined commands.
+type CommandsConfig struct {
+	Builtins map[string]BuiltinOverride `toml:"builtins"`
+	User     []UserCommand              `toml:"user"`
+}
+
+// BuiltinOverride lets users replace the exec string of a built-in command.
+type BuiltinOverride struct {
+	Exec string `toml:"exec"`
+}
+
+// UserCommand is a user-defined shell command exposed in command mode.
+type UserCommand struct {
+	Name   string `toml:"name"`
+	Desc   string `toml:"desc"`
+	Icon   string `toml:"icon"`
+	Exec   string `toml:"exec"`
+	Output string `toml:"output"` // "none" | "palette"; default "none"
 }
 
 // AIConfig holds AI provider selection and per-provider settings.
@@ -168,5 +189,13 @@ func merge(cfg, raw *Config) {
 	// Shortcuts: user-defined shortcuts replace defaults entirely.
 	if len(raw.Search.Shortcuts) > 0 {
 		cfg.Search.Shortcuts = raw.Search.Shortcuts
+	}
+
+	// Commands: always take raw values (no built-in defaults to preserve).
+	if len(raw.Commands.User) > 0 {
+		cfg.Commands.User = raw.Commands.User
+	}
+	if len(raw.Commands.Builtins) > 0 {
+		cfg.Commands.Builtins = raw.Commands.Builtins
 	}
 }

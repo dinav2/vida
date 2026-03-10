@@ -29,11 +29,17 @@ extern int        vida_count_rows(GtkWidget *box);
 extern void       vida_launch_app(const char *desktop_id);
 extern void       vida_copy_to_clipboard(GtkWidget *widget, const char *text);
 extern void       vida_open_url(const char *url);
+extern void       vida_results_set_commands(GtkWidget *box,
+                                            const char **names, const char **descs,
+                                            const char **icons, int n);
+extern void       vida_show_copied_hud(GtkWidget *box);
+extern void       vida_entry_set_placeholder(GtkWidget *entry, const char *text);
 */
 import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -47,6 +53,8 @@ import (
 	"github.com/dinav2/vida/internal/debounce"
 	"github.com/dinav2/vida/internal/ipc"
 )
+
+var jsonUnmarshal = json.Unmarshal
 
 // --- global UI state (only touched from GLib main thread or via gtkIdle) ---
 
@@ -63,6 +71,12 @@ var currentAppExecs []string
 var currentCalcValue string
 var currentURL string
 var currentAIText string
+var currentResultText string // generic copyable text for Ctrl+C
+
+// Command mode state
+var currentCmdNames []string // names of displayed commands (parallel arrays)
+var currentCmdKinds []string // kinds parallel to currentCmdNames
+var currentCmdQuery string   // text after ":" used to run selected command
 
 // --- query state (goroutine-safe) ---
 
@@ -79,7 +93,7 @@ func main() {
 	cname := C.CString("io.vida.ui")
 	defer C.free(unsafe.Pointer(cname))
 
-	app := C.gtk_application_new(cname, C.G_APPLICATION_DEFAULT_FLAGS)
+	app := C.gtk_application_new(cname, C.G_APPLICATION_NON_UNIQUE)
 	defer C.g_object_unref(C.gpointer(app))
 
 	activateStr := C.CString("activate")
@@ -112,7 +126,17 @@ func goOnActivate(app *C.GtkApplication, userData C.gpointer) {
 //export goOnKeyPressed
 func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 	keycode C.guint, state C.GdkModifierType, userData C.gpointer) C.gboolean {
-	_, _, _ = ctrl, keycode, state
+	_, _ = ctrl, keycode
+	// Ctrl+C — copy current result text to clipboard (FR-07a).
+	if state&C.GDK_CONTROL_MASK != 0 && keyval == C.GDK_KEY_c {
+		if currentResultText != "" {
+			ct := C.CString(currentResultText)
+			C.vida_copy_to_clipboard(gEntry, ct)
+			C.free(unsafe.Pointer(ct))
+			C.vida_show_copied_hud(gResults)
+		}
+		return C.TRUE
+	}
 	if keyval == C.GDK_KEY_Escape {
 		cancelInflight()
 		C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
@@ -141,6 +165,30 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 	if keyval == C.GDK_KEY_Return || keyval == C.GDK_KEY_KP_Enter {
 		win := (*C.GtkWidget)(unsafe.Pointer(userData))
 		switch currentKind {
+		case "command_list":
+			idx := selectedIdx
+			if idx < 0 {
+				idx = 0
+			}
+			if idx < len(currentCmdNames) {
+				name := currentCmdNames[idx]
+				// Extract input = text after ":<name> "
+				input := ""
+				parts := strings.SplitN(currentCmdQuery, " ", 2)
+				if len(parts) == 2 {
+					input = strings.TrimSpace(parts[1])
+				}
+				// AI and user commands need input; skip silently if none provided.
+				kind := ""
+				if idx < len(currentCmdKinds) {
+					kind = currentCmdKinds[idx]
+				}
+				if (kind == "ai" || kind == "user") && input == "" {
+					return C.TRUE
+				}
+				go runCommand(name, input, sockFile())
+			}
+			return C.TRUE
 		case "app_list":
 			idx := selectedIdx
 			if idx < 0 {
@@ -180,17 +228,35 @@ func goOnEntryChanged(entry *C.GtkEntry, userData C.gpointer) {
 	onInput(text)
 }
 
+const placeholderNormal = "Search apps, calculate, or ask AI\xe2\x80\xa6"
+const placeholderCommand = "Type a command\xe2\x80\xa6"
+
 // onInput is called on every keystroke. Routes immediately for non-AI kinds,
 // debounces for AI (FR-01b–d).
 func onInput(text string) {
 	aiDebounce.Stop()
 	cancelInflight()
 
+	// Switch placeholder based on mode (FR-01e).
+	isCmd := strings.HasPrefix(text, ":")
+	gtkIdle(func() {
+		if isCmd {
+			cp := C.CString(placeholderCommand)
+			C.vida_entry_set_placeholder(gEntry, cp)
+			C.free(unsafe.Pointer(cp))
+		} else {
+			cp := C.CString(placeholderNormal)
+			C.vida_entry_set_placeholder(gEntry, cp)
+			C.free(unsafe.Pointer(cp))
+		}
+	})
+
 	if text == "" {
 		gtkIdle(func() {
 			C.vida_results_clear(gResults)
 			selectedIdx = -1
 			currentKind = ""
+			currentResultText = ""
 		})
 		return
 	}
@@ -213,11 +279,43 @@ func onInput(text string) {
 		}
 
 		switch resp.Kind {
+		case "command_list":
+			// Parse the JSON array of commands from resp.Message.
+			cmds := parseCommandList(resp.Message)
+			query := strings.TrimPrefix(text, ":")
+			gtkIdle(func() {
+				currentKind = "command_list"
+				currentCmdQuery = query
+				currentResultText = ""
+				selectedIdx = -1
+				n := len(cmds)
+				currentCmdNames = make([]string, n)
+				currentCmdKinds = make([]string, n)
+				cnames := make([]*C.char, n)
+				cdescs := make([]*C.char, n)
+				cicons := make([]*C.char, n)
+				for i, c := range cmds {
+					currentCmdNames[i] = c.name
+					currentCmdKinds[i] = c.kind
+					cnames[i] = C.CString(c.name)
+					defer C.free(unsafe.Pointer(cnames[i]))
+					cdescs[i] = C.CString(c.desc)
+					defer C.free(unsafe.Pointer(cdescs[i]))
+					cicons[i] = C.CString(c.icon)
+					defer C.free(unsafe.Pointer(cicons[i]))
+				}
+				if n == 0 {
+					C.vida_results_set_commands(gResults, nil, nil, nil, 0)
+				} else {
+					C.vida_results_set_commands(gResults, &cnames[0], &cdescs[0], &cicons[0], C.int(n))
+				}
+			})
 		case "calc":
 			val := resp.Value
 			gtkIdle(func() {
 				currentKind = "calc"
 				currentCalcValue = val
+				currentResultText = val
 				selectedIdx = -1
 				C.vida_results_set_label(gResults, C.CString(val))
 			})
@@ -321,6 +419,7 @@ func streamAI(id, input, sock string) {
 			text := accumulated.String()
 			gtkIdle(func() {
 				currentAIText = text
+				currentResultText = text
 				C.vida_results_set_ai_text(gResults, C.CString(text))
 			})
 		case "done", "cancelled":
@@ -434,6 +533,117 @@ func sockFile() string {
 		runtimeDir = filepath.Join("/run/user", "1000")
 	}
 	return filepath.Join(runtimeDir, "vida.sock")
+}
+
+// cmdEntry is a minimal command descriptor parsed from the IPC JSON response.
+type cmdEntry struct {
+	name string
+	desc string
+	icon string
+	kind string
+}
+
+// parseCommandList decodes the JSON array of commands from a command_list IPC message.
+func parseCommandList(raw string) []cmdEntry {
+	// Simple JSON parse without importing encoding/json into CGo file.
+	// The format is: [{"name":"lock","desc":"Lock screen","icon":"...","kind":"system"}, ...]
+	// We'll use encoding/json via a local import-free approach.
+	type item struct {
+		Name string `json:"name"`
+		Desc string `json:"desc"`
+		Icon string `json:"icon"`
+		Kind string `json:"kind"`
+	}
+	// Use the standard library via a package-level import.
+	var items []item
+	if err := jsonUnmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	out := make([]cmdEntry, len(items))
+	for i, it := range items {
+		out[i] = cmdEntry{name: it.Name, desc: it.Desc, icon: it.Icon, kind: it.Kind}
+	}
+	return out
+}
+
+// runCommand sends a run_command IPC message and renders the result.
+func runCommand(name, input, sock string) {
+	conn, err := ipc.ConnectPersistent(sock)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	seq := querySeq.Add(1)
+	id := fmt.Sprintf("cmd-%d", seq)
+
+	if err := conn.SendNoReply(ipc.Message{Type: "run_command", ID: id, Name: name, Input: input}); err != nil {
+		return
+	}
+
+	msg, err := conn.Recv(15 * time.Second)
+	if err != nil {
+		return
+	}
+
+	switch msg.Type {
+	case "command_done":
+		// fire-and-forget: close palette.
+		gtkIdle(func() {
+			C.vida_hide(gWindow)
+			C.vida_entry_clear(gEntry)
+			C.vida_results_clear(gResults)
+			cp := C.CString(placeholderNormal)
+			C.vida_entry_set_placeholder(gEntry, cp)
+			C.free(unsafe.Pointer(cp))
+			currentKind = ""
+			currentResultText = ""
+		})
+	case "command_result":
+		val := msg.Value
+		gtkIdle(func() {
+			currentKind = "command_result"
+			currentResultText = val
+			selectedIdx = -1
+			cv := C.CString(val)
+			C.vida_results_set_label(gResults, cv)
+			C.free(unsafe.Pointer(cv))
+		})
+	case "command_error":
+		errMsg := msg.Message
+		gtkIdle(func() {
+			currentKind = ""
+			currentResultText = ""
+			ce := C.CString("Error: " + errMsg)
+			C.vida_results_set_label(gResults, ce)
+			C.free(unsafe.Pointer(ce))
+		})
+	// AI command — stream tokens.
+	case "token":
+		var accumulated strings.Builder
+		accumulated.WriteString(msg.Value)
+		for {
+			next, err := conn.Recv(30 * time.Second)
+			if err != nil {
+				break
+			}
+			if next.Type == "done" || next.Type == "cancelled" {
+				break
+			}
+			if next.Type == "token" {
+				accumulated.WriteString(next.Value)
+				text := accumulated.String()
+				gtkIdle(func() {
+					currentKind = "ai_stream"
+					currentAIText = text
+					currentResultText = text
+					ct := C.CString(text)
+					C.vida_results_set_ai_text(gResults, ct)
+					C.free(unsafe.Pointer(ct))
+				})
+			}
+		}
+	}
 }
 
 // Suppress unused import warnings for packages only used via CGo indirectly.

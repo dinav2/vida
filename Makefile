@@ -2,7 +2,7 @@ PREFIX     ?= $(HOME)/.local
 BINDIR     := $(PREFIX)/bin
 CGO_ENABLED := 1
 
-.PHONY: build install test vet clean
+.PHONY: build install test vet clean restart
 
 build:
 	CGO_ENABLED=$(CGO_ENABLED) go build -o bin/vida         ./cmd/vida/
@@ -22,3 +22,11 @@ vet:
 
 clean:
 	rm -rf bin/
+
+# Rebuild and restart running processes (useful during development).
+restart: build
+	pkill vida-daemon 2>/dev/null || true
+	pkill vida-ui     2>/dev/null || true
+	./bin/vida-daemon &
+	sleep 0.3
+	./bin/vida-ui &

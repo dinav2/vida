@@ -30,6 +30,9 @@ type Message struct {
 	IDs      string `json:"ids,omitempty"`   // newline-separated desktop IDs for app_list
 	Exec     string `json:"exec,omitempty"`  // newline-separated exec strings for app_list
 	Icons    string `json:"icons"` // newline-separated icon names for app_list (always sent in app_list)
+
+	// Command mode fields.
+	Name string `json:"name,omitempty"` // command name for run_command
 }
 
 // ReplyFunc sends a reply message to the connected client.
