@@ -39,12 +39,17 @@ type searchItem struct {
 func (idx *Index) Len() int { return len(idx.apps) }
 
 
-// DefaultDirs returns the standard XDG application directories.
+// DefaultDirs returns the standard XDG application directories, including
+// Flatpak export paths (silently skipped if absent).
 func DefaultDirs() []string {
+	home := os.Getenv("HOME")
 	return []string{
 		"/usr/share/applications",
 		"/usr/local/share/applications",
-		os.Getenv("HOME") + "/.local/share/applications",
+		home + "/.local/share/applications",
+		// Flatpak: system-wide and per-user installs
+		"/var/lib/flatpak/exports/share/applications",
+		home + "/.local/share/flatpak/exports/share/applications",
 	}
 }
 
