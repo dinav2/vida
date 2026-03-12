@@ -56,13 +56,26 @@ static const char *VIDA_CSS =
     "  box-shadow: none;"
     "}"
 
-    /* Inner panel: dark frosted glass, rounded corners, subtle border.
-     * Width is set via gtk_widget_set_size_request — GTK4 CSS does not
-     * support max-width. */
+    /* Inner panel: dark frosted glass, rounded corners, subtle border + depth shadow. */
     ".vida-panel {"
     "  background: rgba(20, 20, 25, 0.92);"
     "  border-radius: 16px;"
     "  border: 1px solid rgba(255, 255, 255, 0.08);"
+    "  box-shadow: 0 24px 64px rgba(0,0,0,0.60), 0 4px 16px rgba(0,0,0,0.35);"
+    "}"
+
+    /* Stack entrance fade: add/remove .vida-hidden to drive opacity transition */
+    ".vida-root-stack {"
+    "  transition: opacity 180ms cubic-bezier(0.0, 0.0, 0.2, 1.0);"
+    "}"
+    ".vida-root-stack.vida-hidden {"
+    "  opacity: 0;"
+    "}"
+
+    /* Chat bubble entrance animation */
+    "@keyframes vida-bubble-in {"
+    "  from { opacity: 0; }"
+    "  to   { opacity: 1; }"
     "}"
 
     /* Search entry blends into panel */
@@ -127,6 +140,7 @@ static const char *VIDA_CSS =
     "  border-radius: 8px;"
     "  padding: 0;"
     "  min-height: 56px;"
+    "  transition: background 100ms ease;"
     "}"
     ".vida-row:hover {"
     "  background: rgba(255, 255, 255, 0.07);"
@@ -251,6 +265,7 @@ static const char *VIDA_CSS =
     "  border-radius: 6px;"
     "  padding: 2px 8px;"
     "  min-height: 0;"
+    "  transition: color 120ms ease, background 120ms ease;"
     "}"
     ".vida-chat-back:hover {"
     "  color: rgba(255,255,255,0.75);"
@@ -272,6 +287,7 @@ static const char *VIDA_CSS =
     "  border-radius: 18px 18px 4px 18px;"
     "  padding: 10px 16px;"
     "  margin: 3px 0 3px 80px;"
+    "  animation: vida-bubble-in 200ms ease-out both;"
     "}"
 
     /* AI bubble — left side, no fill, lighter text */
@@ -284,6 +300,7 @@ static const char *VIDA_CSS =
     "  border-radius: 4px 18px 18px 18px;"
     "  padding: 10px 16px;"
     "  margin: 3px 80px 3px 0;"
+    "  animation: vida-bubble-in 250ms ease-out both;"
     "}"
 
     /* Chat input row */
@@ -300,6 +317,7 @@ static const char *VIDA_CSS =
     "  border-radius: 20px;"
     "  padding: 9px 16px;"
     "  caret-color: #ffffff;"
+    "  transition: border-color 150ms ease, background 150ms ease;"
     "}"
     ".vida-chat-entry:focus {"
     "  border-color: rgba(99, 102, 241, 0.6);"
@@ -630,7 +648,19 @@ GtkWidget *vida_build_window(GtkApplication *app,
 
 /* ---------- Helpers called from Go ---------- */
 
-void vida_show(GtkWidget *w)  { gtk_widget_set_visible(w, TRUE);  }
+/* Idle callback: remove hidden class to trigger fade-in transition. */
+static gboolean _show_stack_fade(gpointer data) {
+    gtk_widget_remove_css_class(GTK_WIDGET(data), "vida-hidden");
+    return G_SOURCE_REMOVE;
+}
+
+void vida_show(GtkWidget *w) {
+    /* Stage: mark hidden (opacity:0), show window, then on next idle
+     * remove the class so CSS transition fades from 0→1. */
+    if (s_stack) gtk_widget_add_css_class(GTK_WIDGET(s_stack), "vida-hidden");
+    gtk_widget_set_visible(w, TRUE);
+    if (s_stack) g_idle_add(_show_stack_fade, s_stack);
+}
 void vida_hide(GtkWidget *w)  { gtk_widget_set_visible(w, FALSE); }
 
 /* Show the answer bar with a computed value and type label (e.g. "CALC"). */
@@ -662,6 +692,9 @@ void vida_chat_show(const char *cmd_name) {
     GtkWidget *lbl = GTK_WIDGET(g_object_get_data(G_OBJECT(s_chat_header), "title-label"));
     if (lbl) gtk_label_set_text(GTK_LABEL(lbl), cmd_name ? cmd_name : "");
 
+    gtk_stack_set_transition_type(GTK_STACK(s_stack),
+                                  GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT);
+    gtk_stack_set_transition_duration(GTK_STACK(s_stack), 200);
     gtk_stack_set_visible_child_name(GTK_STACK(s_stack), "chat");
     if (s_chat_entry) {
         gtk_widget_set_sensitive(s_chat_entry, TRUE);
@@ -672,6 +705,9 @@ void vida_chat_show(const char *cmd_name) {
 /* Switch back to palette view. */
 void vida_chat_clear(void) {
     if (!s_stack) return;
+    gtk_stack_set_transition_type(GTK_STACK(s_stack),
+                                  GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
+    gtk_stack_set_transition_duration(GTK_STACK(s_stack), 200);
     gtk_stack_set_visible_child_name(GTK_STACK(s_stack), "palette");
 }
 
@@ -773,6 +809,9 @@ void vida_note_show(const char *prefill_title) {
     }
     if (s_note_tags)
         gtk_editable_set_text(GTK_EDITABLE(s_note_tags), "");
+    gtk_stack_set_transition_type(GTK_STACK(s_stack),
+                                  GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT);
+    gtk_stack_set_transition_duration(GTK_STACK(s_stack), 200);
     gtk_stack_set_visible_child_name(GTK_STACK(s_stack), "note");
     if (s_note_title) gtk_widget_grab_focus(s_note_title);
 }
