@@ -14,6 +14,7 @@ const (
 	KindSystem = "system" // shell exec, fire-and-forget or captured output
 	KindAI     = "ai"    // routed through AI provider with fixed system prompt
 	KindUser   = "user"  // user-defined shell exec
+	KindNote   = "note"  // note form — handled client-side in the UI
 )
 
 // Command is a single named action in the registry.
@@ -51,6 +52,9 @@ var builtinSystem = []Command{
 	// reload-vida: Exec is empty — daemon handles it via IPC reload message.
 	{Name: "reload-vida", Desc: "Reload vida index and config", Icon: "view-refresh-symbolic",
 		Kind: KindSystem, Exec: "", Output: "none"},
+	// note: handled client-side in vida-ui; daemon returns command_done immediately.
+	{Name: "note", Desc: "Create a new note", Icon: "text-editor",
+		Kind: KindNote, Exec: "", Output: "none"},
 }
 
 // builtinAI is the set of AI-backed commands with fixed system prompts.

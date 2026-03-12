@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+// HistoryEntry represents one turn in a multi-turn AI conversation (FR-04b).
+type HistoryEntry struct {
+	Role    string `json:"role"`    // "user" | "assistant"
+	Content string `json:"content"`
+}
+
 // Message is a JSON message sent over the IPC socket.
 type Message struct {
 	Type    string `json:"type"`
@@ -32,7 +38,8 @@ type Message struct {
 	Icons    string `json:"icons"` // newline-separated icon names for app_list (always sent in app_list)
 
 	// Command mode fields.
-	Name string `json:"name,omitempty"` // command name for run_command
+	Name    string         `json:"name,omitempty"`    // command name for run_command
+	History []HistoryEntry `json:"history,omitempty"` // multi-turn conversation history
 }
 
 // ReplyFunc sends a reply message to the connected client.

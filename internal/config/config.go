@@ -31,6 +31,15 @@ type Config struct {
 	Search   SearchConfig   `toml:"search"`
 	UI       UIConfig       `toml:"ui"`
 	Commands CommandsConfig `toml:"commands"`
+	Notes    NotesConfig    `toml:"notes"`
+}
+
+// NotesConfig holds settings for the :note command.
+type NotesConfig struct {
+	Dir         string `toml:"dir"`
+	DailySubdir string `toml:"daily_subdir"`
+	InboxSubdir string `toml:"inbox_subdir"`
+	Template    string `toml:"template"`
 }
 
 // CommandsConfig holds built-in overrides and user-defined commands.
@@ -197,5 +206,19 @@ func merge(cfg, raw *Config) {
 	}
 	if len(raw.Commands.Builtins) > 0 {
 		cfg.Commands.Builtins = raw.Commands.Builtins
+	}
+
+	// Notes.
+	if raw.Notes.Dir != "" {
+		cfg.Notes.Dir = raw.Notes.Dir
+	}
+	if raw.Notes.DailySubdir != "" {
+		cfg.Notes.DailySubdir = raw.Notes.DailySubdir
+	}
+	if raw.Notes.InboxSubdir != "" {
+		cfg.Notes.InboxSubdir = raw.Notes.InboxSubdir
+	}
+	if raw.Notes.Template != "" {
+		cfg.Notes.Template = raw.Notes.Template
 	}
 }

