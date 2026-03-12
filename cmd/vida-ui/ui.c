@@ -18,9 +18,11 @@ extern void     goOnEntryChanged(GtkEntry *entry, gpointer user_data);
 extern gboolean goProcessIdle(gpointer user_data);
 extern void     goOnRowActivated(GtkButton *btn, gpointer user_data);
 extern void     goOnChatEntryActivate(GtkEntry *entry, gpointer user_data);
+extern void     goOnChatBack(GtkButton *btn, gpointer user_data);
 
 /* Chat / note view static widget references */
 static GtkWidget *s_stack         = NULL;
+static GtkWidget *s_win           = NULL;
 static GtkWidget *s_chat_scroll   = NULL;
 static GtkWidget *s_chat_history  = NULL;
 static GtkWidget *s_chat_header   = NULL;
@@ -226,118 +228,155 @@ static const char *VIDA_CSS =
     "  margin-top: 2px;"
     "}"
 
-    /* Chat view — header bar */
+    /* ── Chat view ──────────────────────────────────────────── */
+
+    /* Header: command name + back button */
     ".vida-chat-header {"
-    "  padding: 12px 16px;"
-    "  border-bottom: 1px solid rgba(255, 255, 255, 0.08);"
+    "  padding: 14px 20px 12px 20px;"
+    "  border-bottom: 1px solid rgba(255, 255, 255, 0.07);"
     "}"
     ".vida-chat-header-label {"
     "  font-family: 'Inter', system-ui, sans-serif;"
-    "  font-size: 13px;"
-    "  font-weight: 600;"
-    "  color: rgba(255, 255, 255, 0.7);"
-    "  letter-spacing: 0.5px;"
+    "  font-size: 12px;"
+    "  font-weight: 700;"
+    "  color: rgba(255, 255, 255, 0.4);"
+    "  letter-spacing: 1.5px;"
+    "  text-transform: uppercase;"
     "}"
     ".vida-chat-back {"
-    "  font-family: 'Inter', system-ui, sans-serif;"
-    "  font-size: 13px;"
-    "  color: rgba(255, 255, 255, 0.45);"
+    "  font-size: 18px;"
+    "  color: rgba(255, 255, 255, 0.3);"
     "  background: transparent;"
     "  border: none;"
-    "  padding: 0 4px;"
+    "  border-radius: 6px;"
+    "  padding: 2px 8px;"
+    "  min-height: 0;"
     "}"
-    ".vida-chat-back:hover { color: rgba(255,255,255,0.8); }"
+    ".vida-chat-back:hover {"
+    "  color: rgba(255,255,255,0.75);"
+    "  background: rgba(255,255,255,0.07);"
+    "}"
 
-    /* Chat message history */
+    /* Scrollable message history */
     ".vida-chat-history {"
-    "  padding: 12px 16px;"
+    "  padding: 16px 20px 8px 20px;"
     "}"
 
-    /* User message bubble — right-aligned, subtle tint */
+    /* User bubble — right side, pill shape, subtle fill */
     ".vida-msg-user {"
     "  font-family: 'Inter', system-ui, sans-serif;"
     "  font-size: 14px;"
+    "  line-height: 1.5;"
     "  color: #ffffff;"
-    "  background: rgba(255, 255, 255, 0.09);"
-    "  border-radius: 12px 12px 4px 12px;"
-    "  padding: 8px 14px;"
-    "  margin: 4px 0 4px 60px;"
+    "  background: rgba(99, 102, 241, 0.35);"
+    "  border-radius: 18px 18px 4px 18px;"
+    "  padding: 10px 16px;"
+    "  margin: 3px 0 3px 80px;"
     "}"
 
-    /* AI message bubble — left-aligned, no tint */
+    /* AI bubble — left side, no fill, lighter text */
     ".vida-msg-ai {"
     "  font-family: 'Inter', system-ui, sans-serif;"
     "  font-size: 14px;"
-    "  color: rgba(255, 255, 255, 0.9);"
-    "  background: transparent;"
-    "  border-radius: 12px 12px 12px 4px;"
-    "  padding: 8px 14px 8px 0;"
-    "  margin: 4px 60px 4px 0;"
+    "  line-height: 1.6;"
+    "  color: rgba(255, 255, 255, 0.88);"
+    "  background: rgba(255, 255, 255, 0.05);"
+    "  border-radius: 4px 18px 18px 18px;"
+    "  padding: 10px 16px;"
+    "  margin: 3px 80px 3px 0;"
     "}"
 
-    /* Chat input entry */
+    /* Chat input row */
+    ".vida-chat-input-row {"
+    "  padding: 12px 16px 14px 16px;"
+    "  border-top: 1px solid rgba(255, 255, 255, 0.07);"
+    "}"
     ".vida-chat-entry {"
     "  font-family: 'Inter', system-ui, sans-serif;"
-    "  font-size: 15px;"
+    "  font-size: 14px;"
     "  color: #ffffff;"
-    "  background: rgba(255, 255, 255, 0.06);"
+    "  background: rgba(255, 255, 255, 0.07);"
     "  border: 1px solid rgba(255, 255, 255, 0.1);"
-    "  border-radius: 8px;"
-    "  padding: 10px 14px;"
+    "  border-radius: 20px;"
+    "  padding: 9px 16px;"
     "  caret-color: #ffffff;"
     "}"
     ".vida-chat-entry:focus {"
-    "  border-color: rgba(255, 255, 255, 0.25);"
+    "  border-color: rgba(99, 102, 241, 0.6);"
+    "  background: rgba(255, 255, 255, 0.09);"
     "  outline: none;"
     "  box-shadow: none;"
     "}"
-    ".vida-chat-input-row {"
-    "  padding: 12px 16px;"
-    "  border-top: 1px solid rgba(255, 255, 255, 0.06);"
-    "}"
+    "entry.vida-chat-entry > text { background: transparent; }"
+    "entry.vida-chat-entry:focus, entry.vida-chat-entry:focus-within,"
+    "entry.vida-chat-entry:focus-visible { outline: none; box-shadow: none; }"
 
-    /* Note form */
+    /* ── Note form ──────────────────────────────────────────── */
+
     ".vida-note-title {"
     "  font-family: 'Inter', system-ui, sans-serif;"
-    "  font-size: 16px;"
+    "  font-size: 18px;"
     "  font-weight: 600;"
     "  color: #ffffff;"
     "  background: transparent;"
     "  border: none;"
-    "  border-bottom: 1px solid rgba(255, 255, 255, 0.1);"
     "  border-radius: 0;"
-    "  padding: 14px 20px;"
+    "  padding: 18px 22px 14px 22px;"
     "  box-shadow: none;"
+    "  caret-color: #ffffff;"
     "}"
     ".vida-note-title:focus { outline: none; box-shadow: none; }"
+    "entry.vida-note-title > text { background: transparent; }"
+    "entry.vida-note-title:focus, entry.vida-note-title:focus-within,"
+    "entry.vida-note-title:focus-visible { outline: none; box-shadow: none; }"
+
+    /* Textarea for note body */
     ".vida-note-body {"
     "  font-family: 'Inter', system-ui, sans-serif;"
     "  font-size: 14px;"
-    "  color: rgba(255, 255, 255, 0.85);"
+    "  line-height: 1.65;"
     "  background: transparent;"
     "  border: none;"
-    "  padding: 12px 20px;"
+    "  padding: 0 22px 8px 22px;"
     "}"
     "textview.vida-note-body > text {"
     "  background: transparent;"
-    "  color: rgba(255, 255, 255, 0.85);"
+    "  color: rgba(255, 255, 255, 0.8);"
+    "  caret-color: #ffffff;"
     "}"
+    "textview.vida-note-body:focus, textview.vida-note-body:focus-visible {"
+    "  outline: none;"
+    "  box-shadow: none;"
+    "}"
+
+    /* Divider between body and tags */
+    ".vida-note-divider {"
+    "  background: rgba(255, 255, 255, 0.07);"
+    "  min-height: 1px;"
+    "  margin: 4px 0;"
+    "}"
+
     ".vida-note-tags {"
     "  font-family: 'Inter', system-ui, sans-serif;"
     "  font-size: 13px;"
-    "  color: rgba(255, 255, 255, 0.5);"
+    "  color: rgba(255, 255, 255, 0.4);"
     "  background: transparent;"
     "  border: none;"
-    "  border-top: 1px solid rgba(255, 255, 255, 0.06);"
     "  border-radius: 0;"
-    "  padding: 10px 20px;"
+    "  padding: 10px 22px 6px 22px;"
     "  box-shadow: none;"
     "}"
     ".vida-note-tags:focus { outline: none; box-shadow: none; }"
+    "entry.vida-note-tags > text { background: transparent; }"
+    "entry.vida-note-tags:focus, entry.vida-note-tags:focus-within,"
+    "entry.vida-note-tags:focus-visible { outline: none; box-shadow: none; }"
+
     ".vida-note-hint {"
+    "  font-family: 'Inter', system-ui, sans-serif;"
     "  font-size: 11px;"
-    "  color: rgba(255, 255, 255, 0.25);"
-    "  padding: 4px 20px 8px 20px;"
+    "  color: rgba(255, 255, 255, 0.2);"
+    "  padding: 2px 22px 12px 22px;"
+    "  letter-spacing: 0.3px;"
     "}";
 
 static void load_css(void) {
@@ -363,6 +402,7 @@ GtkWidget *vida_build_window(GtkApplication *app,
     gtk_window_set_title(GTK_WINDOW(win), "vida");
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
     gtk_widget_set_name(win, "vida-window");
+    s_win = win;
 
     /* Layer shell */
     gtk_layer_init_for_window(GTK_WINDOW(win));
@@ -469,7 +509,7 @@ GtkWidget *vida_build_window(GtkApplication *app,
     gtk_widget_add_css_class(back_btn, "vida-chat-back");
     gtk_button_set_has_frame(GTK_BUTTON(back_btn), FALSE);
     gtk_box_append(GTK_BOX(chat_header), back_btn);
-    /* back_btn click is handled via the key controller (sends Escape) */
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(goOnChatBack), NULL);
 
     /* Scrolled message history */
     GtkWidget *chat_scroll = gtk_scrolled_window_new();
@@ -521,6 +561,7 @@ GtkWidget *vida_build_window(GtkApplication *app,
     gtk_widget_add_css_class(note_close, "vida-chat-back");
     gtk_button_set_has_frame(GTK_BUTTON(note_close), FALSE);
     gtk_box_append(GTK_BOX(note_header), note_close);
+    g_signal_connect(note_close, "clicked", G_CALLBACK(goOnChatBack), NULL);
 
     /* Title entry */
     GtkWidget *note_title = gtk_entry_new();
@@ -531,23 +572,35 @@ GtkWidget *vida_build_window(GtkApplication *app,
     s_note_title = note_title;
 
     /* Body textarea */
+    /* Body in a scrolled window so the panel never grows beyond its natural size. */
+    GtkWidget *note_body_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(note_body_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_hexpand(note_body_scroll, TRUE);
+    gtk_widget_set_size_request(note_body_scroll, -1, 200);
+    gtk_box_append(GTK_BOX(note_panel), note_body_scroll);
+
     GtkWidget *note_body_tv = gtk_text_view_new();
     gtk_widget_add_css_class(note_body_tv, "vida-note-body");
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(note_body_tv), GTK_WRAP_WORD_CHAR);
     gtk_widget_set_hexpand(note_body_tv, TRUE);
-    gtk_widget_set_size_request(note_body_tv, -1, 160);
-    gtk_box_append(GTK_BOX(note_panel), note_body_tv);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(note_body_scroll), note_body_tv);
     s_note_body_tv = note_body_tv;
+
+    /* Divider */
+    GtkWidget *note_div = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_add_css_class(note_div, "vida-note-divider");
+    gtk_box_append(GTK_BOX(note_panel), note_div);
 
     /* Tags entry */
     GtkWidget *note_tags = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(note_tags), "Tags (comma-separated)");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(note_tags), "tags, comma, separated");
     gtk_widget_add_css_class(note_tags, "vida-note-tags");
     gtk_widget_set_hexpand(note_tags, TRUE);
     gtk_box_append(GTK_BOX(note_panel), note_tags);
     s_note_tags = note_tags;
 
-    GtkWidget *note_hint = gtk_label_new("Ctrl+S to save  \xc2\xb7  Esc to discard");
+    GtkWidget *note_hint = gtk_label_new("Ctrl+S  save   \xc2\xb7\xc2\xb7\xc2\xb7   Esc  discard");
     gtk_widget_add_css_class(note_hint, "vida-note-hint");
     gtk_label_set_xalign(GTK_LABEL(note_hint), 0.0f);
     gtk_box_append(GTK_BOX(note_panel), note_hint);
@@ -665,7 +718,32 @@ void vida_chat_update_last_ai(const char *text) {
 
 /* Enable or disable the chat follow-up entry. */
 void vida_chat_set_entry_sensitive(gboolean sensitive) {
-    if (s_chat_entry) gtk_widget_set_sensitive(s_chat_entry, sensitive);
+    if (!s_chat_entry) return;
+    gtk_widget_set_sensitive(s_chat_entry, sensitive);
+    /* Re-focus the entry when re-enabling so Enter sends the next message. */
+    if (sensitive) gtk_widget_grab_focus(s_chat_entry);
+}
+
+/* Enter chat/note mode: remove L/R anchors so the window shrinks to panel width
+ * (640px, centered by compositor) and allows pointer events to pass through to
+ * other apps in the transparent areas. Switch to ON_DEMAND keyboard mode so the
+ * user can click other windows freely, then click back to resume typing. */
+void vida_enter_chat_mode(GtkWidget *win) {
+    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_LEFT,  FALSE);
+    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_RIGHT, FALSE);
+    gtk_layer_set_keyboard_mode(GTK_WINDOW(win),
+                                GTK_LAYER_SHELL_KEYBOARD_MODE_ON_DEMAND);
+    /* Request compositor-level keyboard focus so typing works immediately. */
+    gtk_window_present(GTK_WINDOW(win));
+}
+
+/* Return to palette mode: restore full-width overlay and exclusive keyboard. */
+void vida_enter_palette_mode(GtkWidget *win) {
+    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_LEFT,  TRUE);
+    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
+    gtk_layer_set_keyboard_mode(GTK_WINDOW(win),
+                                GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE);
+    gtk_window_present(GTK_WINDOW(win));
 }
 
 /* Get chat entry text. */

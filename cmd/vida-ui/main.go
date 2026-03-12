@@ -53,6 +53,10 @@ extern void vida_note_show(const char *prefill_title);
 extern void vida_note_get_title(char *buf, int len);
 extern void vida_note_get_body(char *buf, int len);
 extern void vida_note_get_tags(char *buf, int len);
+
+// Layer shell mode switching.
+extern void vida_enter_chat_mode(GtkWidget *win);
+extern void vida_enter_palette_mode(GtkWidget *win);
 */
 import "C"
 
@@ -166,53 +170,41 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 			C.vida_copy_to_clipboard(gEntry, ct)
 			C.free(unsafe.Pointer(ct))
 			C.vida_show_copied_hud(gResults)
+			return C.TRUE
 		}
-		return C.TRUE
+		return C.FALSE
 	}
 	if keyval == C.GDK_KEY_Escape {
 		cancelInflight()
 		switch currentKind {
 		case "chat":
-			gtkIdle(func() {
-				currentKind = ""
-				chatHistory = nil
-				C.vida_chat_clear()
-				C.vida_entry_clear(gEntry)
-				C.vida_results_clear(gResults)
-				cp := C.CString(placeholderNormal)
-				C.vida_entry_set_placeholder(gEntry, cp)
-				C.free(unsafe.Pointer(cp))
-			})
+			returnToPalette()
 		case "note_form":
-			gtkIdle(func() {
-				currentKind = ""
-				C.vida_chat_clear() // returns to palette
-			})
+			returnToPalette()
 		default:
 			C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
 		}
 		return C.TRUE
 	}
-	// Ctrl+B — back from chat view (FR-03b).
+	// Ctrl+B — back from chat/note view (FR-03b).
 	if state&C.GDK_CONTROL_MASK != 0 && keyval == C.GDK_KEY_b {
-		if currentKind == "chat" {
+		if currentKind == "chat" || currentKind == "note_form" {
 			cancelInflight()
-			gtkIdle(func() {
-				currentKind = ""
-				chatHistory = nil
-				C.vida_chat_clear()
-				C.vida_entry_clear(gEntry)
-				C.vida_results_clear(gResults)
-			})
+			returnToPalette()
 			return C.TRUE
 		}
 	}
-	// Ctrl+S — save note (FR-05d).
+	// Ctrl+S — save note (FR-05d). Runs on main thread to safely read GTK widgets.
 	if state&C.GDK_CONTROL_MASK != 0 && keyval == C.GDK_KEY_s {
 		if currentKind == "note_form" {
-			go saveNote()
+			saveNote()
 			return C.TRUE
 		}
+	}
+	// In chat/note modes: only the special shortcuts above are handled by us;
+	// everything else (Enter, arrows, typing) goes straight to the focused widget.
+	if currentKind == "chat" || currentKind == "note_form" {
+		return C.FALSE
 	}
 	if keyval == C.GDK_KEY_Down {
 		n := int(C.vida_count_rows(gResults))
@@ -266,6 +258,7 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 						cp := C.CString(prefill)
 						C.vida_note_show(cp)
 						C.free(unsafe.Pointer(cp))
+						C.vida_enter_chat_mode(gWindow)
 					})
 					return C.TRUE
 				}
@@ -300,6 +293,30 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 		return C.TRUE
 	}
 	return C.FALSE
+}
+
+// returnToPalette switches back from chat/note to palette view.
+// Must only be called from the GTK main thread (key handler or button handler).
+func returnToPalette() {
+	currentKind = ""
+	chatHistory = nil
+	C.vida_chat_clear()
+	C.vida_entry_clear(gEntry)
+	C.vida_results_clear(gResults)
+	C.vida_answer_clear(gAnswer)
+	cp := C.CString(placeholderNormal)
+	C.vida_entry_set_placeholder(gEntry, cp)
+	C.free(unsafe.Pointer(cp))
+	C.vida_enter_palette_mode(gWindow)
+	C.vida_grab_focus(gEntry)
+}
+
+//export goOnChatBack
+func goOnChatBack(btn *C.GtkButton, userData C.gpointer) {
+	_, _ = btn, userData
+	cancelInflight()
+	// Direct execution — called from GTK main thread via button signal.
+	returnToPalette()
 }
 
 //export goOnEntryChanged
@@ -614,7 +631,7 @@ func subscribe(sockPath string) error {
 }
 
 // gtkIdle schedules fn to run on the GLib main thread.
-var idleQueue = make(chan func(), 64)
+var idleQueue = make(chan func(), 512)
 
 func gtkIdle(fn func()) {
 	select {
@@ -741,14 +758,21 @@ func runCommand(name, input, sock string) {
 			currentKind = "chat"
 			chatCmdName = cmdName
 			currentResultText = ""
-			// Add user bubble.
+			cn := C.CString(cmdName)
 			cu := C.CString(userInput)
-			C.vida_chat_show(C.CString(cmdName))
-			C.vida_chat_append_message(C.CString("user"), cu)
-			C.free(unsafe.Pointer(cu))
-			// Add empty AI bubble to stream into.
-			C.vida_chat_append_message(C.CString("ai"), C.CString(""))
+			cr := C.CString("user")
+			ca := C.CString("ai")
+			ce := C.CString("")
+			C.vida_chat_show(cn)
+			C.vida_chat_append_message(cr, cu)
+			C.vida_chat_append_message(ca, ce)
 			C.vida_chat_set_entry_sensitive(C.FALSE)
+			C.vida_enter_chat_mode(gWindow)
+			C.free(unsafe.Pointer(cn))
+			C.free(unsafe.Pointer(cu))
+			C.free(unsafe.Pointer(cr))
+			C.free(unsafe.Pointer(ca))
+			C.free(unsafe.Pointer(ce))
 		})
 
 		// Store user turn in history.
