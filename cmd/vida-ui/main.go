@@ -11,7 +11,8 @@ package main
 extern void       vida_on_activate(GtkApplication *app, gpointer data);
 extern GtkWidget *vida_build_window(GtkApplication *app,
                                     GtkWidget **out_entry,
-                                    GtkWidget **out_results);
+                                    GtkWidget **out_results,
+                                    GtkWidget **out_answer);
 extern void       vida_show(GtkWidget *w);
 extern void       vida_hide(GtkWidget *w);
 extern void       vida_entry_clear(GtkWidget *entry);
@@ -19,6 +20,8 @@ extern void       vida_entry_get_text(GtkWidget *entry, char *buf, int buflen);
 extern void       vida_results_clear(GtkWidget *box);
 extern void       vida_results_set_label(GtkWidget *box, const char *text);
 extern void       vida_results_set_convert(GtkWidget *box, const char *text);
+extern void       vida_answer_set(GtkWidget *answer, const char *value, const char *type);
+extern void       vida_answer_clear(GtkWidget *answer);
 extern void       vida_results_set_ai_text(GtkWidget *box, const char *text);
 extern void       vida_results_append_text(GtkWidget *box, const char *text);
 extern void       vida_results_set_url(GtkWidget *box, const char *url);
@@ -62,6 +65,7 @@ var jsonUnmarshal = json.Unmarshal
 var gWindow *C.GtkWidget
 var gEntry *C.GtkWidget
 var gResults *C.GtkWidget
+var gAnswer *C.GtkWidget
 
 // --- result selection state (only touched via gtkIdle) ---
 
@@ -113,11 +117,12 @@ func main() {
 //export goOnActivate
 func goOnActivate(app *C.GtkApplication, userData C.gpointer) {
 	_ = userData
-	var entry, results *C.GtkWidget
-	win := C.vida_build_window(app, &entry, &results)
+	var entry, results, answer *C.GtkWidget
+	win := C.vida_build_window(app, &entry, &results, &answer)
 	gWindow = win
 	gEntry = entry
 	gResults = results
+	gAnswer = answer
 
 	aiDebounce = debounce.New(80*time.Millisecond, fireAIQuery)
 
@@ -239,8 +244,10 @@ func onInput(text string) {
 	cancelInflight()
 
 	// Switch placeholder based on mode (FR-01e).
+	// Also clear the answer bar immediately so it doesn't linger between keystrokes.
 	isCmd := strings.HasPrefix(text, ":")
 	gtkIdle(func() {
+		C.vida_answer_clear(gAnswer)
 		if isCmd {
 			cp := C.CString(placeholderCommand)
 			C.vida_entry_set_placeholder(gEntry, cp)
@@ -255,6 +262,7 @@ func onInput(text string) {
 	if text == "" {
 		gtkIdle(func() {
 			C.vida_results_clear(gResults)
+			C.vida_answer_clear(gAnswer)
 			selectedIdx = -1
 			currentKind = ""
 			currentResultText = ""
@@ -285,10 +293,10 @@ func onInput(text string) {
 
 		switch resp.Kind {
 		case "command_list":
-			// Parse the JSON array of commands from resp.Message.
 			cmds := parseCommandList(resp.Message)
 			query := strings.TrimPrefix(text, ":")
 			gtkIdle(func() {
+				C.vida_answer_clear(gAnswer)
 				currentKind = "command_list"
 				currentCmdQuery = query
 				currentResultText = ""
@@ -322,7 +330,12 @@ func onInput(text string) {
 				currentCalcValue = val
 				currentResultText = val
 				selectedIdx = -1
-				C.vida_results_set_label(gResults, C.CString(val))
+				C.vida_results_clear(gResults)
+				cv := C.CString(val)
+				ct := C.CString("CALC")
+				C.vida_answer_set(gAnswer, cv, ct)
+				C.free(unsafe.Pointer(cv))
+				C.free(unsafe.Pointer(ct))
 			})
 		case "convert":
 			val := resp.Value
@@ -331,11 +344,17 @@ func onInput(text string) {
 				currentCalcValue = val
 				currentResultText = val
 				selectedIdx = -1
-				C.vida_results_set_convert(gResults, C.CString(val))
+				C.vida_results_clear(gResults)
+				cv := C.CString(val)
+				ct := C.CString("CONVERT")
+				C.vida_answer_set(gAnswer, cv, ct)
+				C.free(unsafe.Pointer(cv))
+				C.free(unsafe.Pointer(ct))
 			})
 		case "shortcut":
 			url := resp.URL
 			gtkIdle(func() {
+				C.vida_answer_clear(gAnswer)
 				currentKind = "shortcut"
 				currentURL = url
 				selectedIdx = -1
@@ -347,6 +366,7 @@ func onInput(text string) {
 			execs := strings.Split(resp.Exec, "\n")
 			Icons := strings.Split(resp.Icons, "\n")
 			gtkIdle(func() {
+				C.vida_answer_clear(gAnswer)
 				currentKind = "app_list"
 				currentAppIDs = ids
 				currentAppExecs = execs
@@ -367,6 +387,7 @@ func onInput(text string) {
 			})
 		case "ai_stream":
 			gtkIdle(func() {
+				C.vida_answer_clear(gAnswer)
 				currentKind = "ai_stream"
 				currentAIText = ""
 				selectedIdx = -1
@@ -380,6 +401,7 @@ func onInput(text string) {
 			aiDebounce.Trigger()
 		case "empty", "cancelled", "":
 			gtkIdle(func() {
+				C.vida_answer_clear(gAnswer)
 				currentKind = ""
 				selectedIdx = -1
 				C.vida_results_clear(gResults)
@@ -501,6 +523,7 @@ func subscribe(sockPath string) error {
 			gtkIdle(func() {
 				C.vida_entry_clear(gEntry)
 				C.vida_results_clear(gResults)
+				C.vida_answer_clear(gAnswer)
 				selectedIdx = -1
 				currentKind = ""
 				C.vida_show(gWindow)

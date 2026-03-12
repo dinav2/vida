@@ -193,6 +193,26 @@ static const char *VIDA_CSS =
     "}"
     ".vida-open-btn:hover {"
     "  background: rgba(255, 255, 255, 0.18);"
+    "}"
+
+    /* Answer bar — dedicated display for calc / convert results */
+    ".vida-answer {"
+    "  padding: 14px 20px 12px 20px;"
+    "  border-top: 1px solid rgba(255, 255, 255, 0.06);"
+    "  border-bottom: 1px solid rgba(255, 255, 255, 0.06);"
+    "}"
+    ".vida-answer-value {"
+    "  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;"
+    "  font-size: 24px;"
+    "  font-weight: 600;"
+    "  color: #ffffff;"
+    "}"
+    ".vida-answer-type {"
+    "  font-family: 'Inter', system-ui, sans-serif;"
+    "  font-size: 11px;"
+    "  color: rgba(255, 255, 255, 0.28);"
+    "  letter-spacing: 1px;"
+    "  margin-top: 2px;"
     "}";
 
 static void load_css(void) {
@@ -209,7 +229,8 @@ static void load_css(void) {
 
 GtkWidget *vida_build_window(GtkApplication *app,
                               GtkWidget **out_entry,
-                              GtkWidget **out_results) {
+                              GtkWidget **out_results,
+                              GtkWidget **out_answer) {
     load_css();
 
     /* Transparent window */
@@ -259,6 +280,30 @@ GtkWidget *vida_build_window(GtkApplication *app,
 
     gtk_box_append(GTK_BOX(panel), entry_row);
 
+    /* Answer bar — shown for calc/convert results, hidden otherwise */
+    GtkWidget *answer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_add_css_class(answer, "vida-answer");
+    gtk_widget_set_hexpand(answer, TRUE);
+    gtk_widget_set_visible(answer, FALSE);
+
+    GtkWidget *answer_value = gtk_label_new("");
+    gtk_widget_add_css_class(answer_value, "vida-answer-value");
+    gtk_label_set_xalign(GTK_LABEL(answer_value), 0.0f);
+    gtk_label_set_wrap(GTK_LABEL(answer_value), TRUE);
+    gtk_label_set_wrap_mode(GTK_LABEL(answer_value), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_max_width_chars(GTK_LABEL(answer_value), 1);
+    gtk_widget_set_hexpand(answer_value, TRUE);
+    gtk_box_append(GTK_BOX(answer), answer_value);
+
+    GtkWidget *answer_type = gtk_label_new("");
+    gtk_widget_add_css_class(answer_type, "vida-answer-type");
+    gtk_label_set_xalign(GTK_LABEL(answer_type), 0.0f);
+    gtk_box_append(GTK_BOX(answer), answer_type);
+
+    gtk_box_append(GTK_BOX(panel), answer);
+    g_object_set_data(G_OBJECT(answer), "value-label", answer_value);
+    g_object_set_data(G_OBJECT(answer), "type-label", answer_type);
+
     /* Separator */
     GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_widget_add_css_class(sep, "vida-separator");
@@ -292,6 +337,7 @@ GtkWidget *vida_build_window(GtkApplication *app,
 
     *out_entry   = entry;
     *out_results = results;
+    *out_answer  = answer;
     return win;
 }
 
@@ -299,6 +345,20 @@ GtkWidget *vida_build_window(GtkApplication *app,
 
 void vida_show(GtkWidget *w)  { gtk_widget_set_visible(w, TRUE);  }
 void vida_hide(GtkWidget *w)  { gtk_widget_set_visible(w, FALSE); }
+
+/* Show the answer bar with a computed value and type label (e.g. "CALC"). */
+void vida_answer_set(GtkWidget *answer, const char *value, const char *type) {
+    GtkWidget *val_lbl  = GTK_WIDGET(g_object_get_data(G_OBJECT(answer), "value-label"));
+    GtkWidget *type_lbl = GTK_WIDGET(g_object_get_data(G_OBJECT(answer), "type-label"));
+    if (val_lbl)  gtk_label_set_text(GTK_LABEL(val_lbl),  value ? value : "");
+    if (type_lbl) gtk_label_set_text(GTK_LABEL(type_lbl), type  ? type  : "");
+    gtk_widget_set_visible(answer, TRUE);
+}
+
+/* Hide the answer bar. */
+void vida_answer_clear(GtkWidget *answer) {
+    gtk_widget_set_visible(answer, FALSE);
+}
 
 void vida_entry_clear(GtkWidget *entry) {
     gtk_editable_set_text(GTK_EDITABLE(entry), "");
@@ -316,11 +376,12 @@ void vida_grab_focus(GtkWidget *entry) {
 
 /* Show/hide the separator that sits between entry and results. */
 static void set_separator_visible(GtkWidget *results, gboolean visible) {
-    /* Walk up to panel, then find separator (second child of panel). */
+    /* Walk up to panel, then find separator (third child of panel). */
     GtkWidget *panel = gtk_widget_get_parent(results);
     if (!panel) return;
     GtkWidget *child = gtk_widget_get_first_child(panel);
-    /* panel children: entry_row, separator, results */
+    /* panel children: entry_row, answer_bar, separator, results */
+    if (child) child = gtk_widget_get_next_sibling(child); /* answer_bar */
     if (child) child = gtk_widget_get_next_sibling(child); /* separator */
     if (child) gtk_widget_set_visible(child, visible);
 }
