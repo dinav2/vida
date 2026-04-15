@@ -1,7 +1,7 @@
 # vida - Project State
 
 **Version:** 1.0.0
-**Last Updated:** 2026-03-11
+**Last Updated:** 2026-03-18
 
 ---
 
@@ -9,8 +9,8 @@
 
 | Metric | Value |
 |--------|-------|
-| Total Specs | 9 |
-| Completion Rate | 100% |
+| Total Specs | 11 |
+| Completion Rate | 90% |
 | Avg Cycle Time | 2 days |
 
 ### By Stage
@@ -20,16 +20,19 @@
 | DRAFT | 0 | 0% |
 | SPEC | 0 | 0% |
 | TEST-CREATE | 0 | 0% |
-| TEST-APPLY | 0 | 0% |
-| VERIFY | 0 | 0% |
-| DONE | 9 | 100% |
+| TEST-APPLY | 1 | 9% |
+| VERIFY | 1 | 9% |
+| DONE | 9 | 90% |
 | ARCHIVED | 0 | 0% |
 
 ---
 
 ## 📋 Active Specs
 
-_None — all specs complete._
+| ID | Title | Stage | Next Action |
+|----|-------|-------|-------------|
+| SPEC-20260314-010 | File Search | TEST-APPLY | Implement `internal/files`, update router/IPC/daemon/UI |
+| SPEC-20260318-011 | Clipboard History | VERIFY | Run `/specsafe-verify` |
 
 ---
 
