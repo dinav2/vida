@@ -3,26 +3,28 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
-
-	"bytes"
-	"encoding/json"
-	"os/exec"
 	"time"
 
 	"github.com/dinav2/vida/internal/ai"
 	"github.com/dinav2/vida/internal/apps"
+	"github.com/dinav2/vida/internal/clipboard"
 	"github.com/dinav2/vida/internal/commands"
 	"github.com/dinav2/vida/internal/config"
 	"github.com/dinav2/vida/internal/db"
+	"github.com/dinav2/vida/internal/files"
 	"github.com/dinav2/vida/internal/ipc"
 	"github.com/dinav2/vida/internal/router"
 	"github.com/dinav2/vida/internal/shortcuts"
@@ -74,6 +76,7 @@ func run() error {
 
 	d.rebuildRouter()
 	go d.indexApps()
+	go d.indexFiles()
 
 	srv, err := ipc.Listen(sockPath)
 	if err != nil {
@@ -87,6 +90,13 @@ func run() error {
 	defer cancel()
 
 	go srv.Serve(ctx)
+
+	d.mu.RLock()
+	clipEnabled := d.cfg == nil || d.cfg.Clipboard.Enabled
+	d.mu.RUnlock()
+	if clipEnabled {
+		go d.watchClipboard(ctx, srv)
+	}
 
 	log.Printf("vida-daemon: socket ready at %s (pid %d)", sockPath, d.pid)
 	<-ctx.Done()
@@ -104,8 +114,10 @@ type daemon struct {
 	provider    ai.AIProvider
 	rtr         *router.Router
 	appIndex    *apps.Index
+	fileIndex   *files.Index
 	database    *db.DB
 	cmdRegistry *commands.Registry
+	clipStore   *clipboard.Store
 
 	// inflight tracks cancellable in-flight AI queries (TR-05a).
 	inflightMu sync.Mutex
@@ -133,6 +145,7 @@ func (d *daemon) initDB() error {
 		return err
 	}
 	d.database = database
+	d.clipStore = clipboard.NewStore(database)
 	return nil
 }
 
@@ -140,6 +153,7 @@ func (d *daemon) rebuildRouter() {
 	d.mu.RLock()
 	cfg := d.cfg
 	appIndex := d.appIndex
+	fileIndex := d.fileIndex
 	d.mu.RUnlock()
 
 	var providerName string
@@ -190,6 +204,9 @@ func (d *daemon) rebuildRouter() {
 	if appIndex != nil {
 		opts = append(opts, router.WithAppIndex(appIndex))
 	}
+	if fileIndex != nil {
+		opts = append(opts, router.WithFileIndex(fileIndex))
+	}
 	opts = append(opts, router.WithAIFunc(aiFunc))
 
 	d.mu.Lock()
@@ -215,6 +232,33 @@ func (d *daemon) indexApps() {
 	d.rebuildRouter()
 }
 
+func (d *daemon) indexFiles() {
+	d.mu.RLock()
+	cfg := d.cfg
+	d.mu.RUnlock()
+
+	dirs := []string{}
+	includeHidden := false
+	if cfg != nil && len(cfg.Files.Dirs) > 0 {
+		dirs = cfg.Files.Dirs
+		includeHidden = cfg.Files.IncludeHidden
+	} else {
+		home, _ := os.UserHomeDir()
+		dirs = []string{home}
+	}
+
+	idx, err := files.BuildIndex(dirs, includeHidden)
+	if err != nil {
+		log.Printf("file indexing failed: %v", err)
+		return
+	}
+	log.Printf("vida-daemon: indexed %d files", idx.Len())
+	d.mu.Lock()
+	d.fileIndex = idx
+	d.mu.Unlock()
+	d.rebuildRouter()
+}
+
 func (d *daemon) handleMessage(msg ipc.Message, reply ipc.ReplyFunc) {
 	switch msg.Type {
 	case "ping":
@@ -236,6 +280,7 @@ func (d *daemon) handleMessage(msg ipc.Message, reply ipc.ReplyFunc) {
 			log.Printf("reload: config error: %v", err)
 		}
 		d.rebuildRouter()
+		go d.indexFiles()
 		_ = reply(ipc.Message{Type: "ok"})
 	case "query":
 		d.handleQuery(msg, reply)
@@ -244,6 +289,16 @@ func (d *daemon) handleMessage(msg ipc.Message, reply ipc.ReplyFunc) {
 	case "cancel":
 		d.cancelInflight(msg.ID)
 		_ = reply(ipc.Message{Type: "ok", ID: msg.ID})
+	case "clipboard_list":
+		d.handleClipboardList(msg, reply)
+	case "clipboard_paste":
+		d.handleClipboardPaste(msg, reply)
+	case "clipboard_delete":
+		d.handleClipboardDelete(msg, reply)
+	case "clipboard_pin":
+		d.handleClipboardPin(msg, reply)
+	case "clipboard_clear":
+		d.handleClipboardClear(msg, reply)
 	}
 }
 
@@ -279,6 +334,12 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 	case router.KindAIStream:
 		d.streamAI(msg.ID, msg.Input, provider, reply)
 	case router.KindCommandList:
+		// :cb / :clipboard → open clipboard window (TR-05, FR-03a).
+		if result.CommandQuery == "cb" || result.CommandQuery == "clipboard" {
+			_ = reply(ipc.Message{Type: "result", ID: msg.ID, Kind: "show_clipboard"})
+			return
+		}
+
 		d.mu.RLock()
 		reg := d.cmdRegistry
 		d.mu.RUnlock()
@@ -333,6 +394,18 @@ func (d *daemon) handleQuery(msg ipc.Message, reply ipc.ReplyFunc) {
 			resp.Message = strings.Join(names, "\n")
 			resp.IDs = strings.Join(ids, "\n")
 			resp.Exec = strings.Join(execs, "\n")
+			resp.Icons = strings.Join(icons, "\n")
+		case router.KindFileList:
+			names := make([]string, len(result.Files))
+			paths := make([]string, len(result.Files))
+			icons := make([]string, len(result.Files))
+			for i, f := range result.Files {
+				names[i] = f.Name
+				paths[i] = f.Path
+				icons[i] = f.Icon
+			}
+			resp.Message = strings.Join(names, "\n")
+			resp.Paths = strings.Join(paths, "\n")
 			resp.Icons = strings.Join(icons, "\n")
 		}
 		_ = reply(resp)
@@ -408,6 +481,160 @@ func (d *daemon) handleRunCommand(msg ipc.Message, reply ipc.ReplyFunc) {
 	}
 	out := strings.TrimSpace(stdout.String())
 	_ = reply(ipc.Message{Type: "command_result", ID: msg.ID, Value: out})
+}
+
+// --- Clipboard IPC handlers (TR-05, SPEC-20260318-011) ---
+
+func (d *daemon) clipCfg() clipboard.Config {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.cfg == nil {
+		return clipboard.Config{Enabled: true, MaxEntries: 500, MaxAgeDays: 30}
+	}
+	c := d.cfg.Clipboard
+	return clipboard.Config{
+		Enabled:    c.Enabled,
+		MaxEntries: c.MaxEntries,
+		MaxAgeDays: c.MaxAgeDays,
+		Ignore:     c.Ignore,
+	}
+}
+
+func (d *daemon) handleClipboardList(msg ipc.Message, reply ipc.ReplyFunc) {
+	entries, err := d.clipStore.List(msg.Input, 200)
+	if err != nil {
+		_ = reply(ipc.Message{Type: "error", Message: err.Error()})
+		return
+	}
+	contents := make([]string, len(entries))
+	ids := make([]string, len(entries))
+	pinned := make([]string, len(entries))
+	for i, e := range entries {
+		contents[i] = e.Content
+		ids[i] = fmt.Sprintf("%d", e.ID)
+		if e.Pinned {
+			pinned[i] = "1"
+		} else {
+			pinned[i] = "0"
+		}
+	}
+	_ = reply(ipc.Message{
+		Type:  "clipboard_entries",
+		Value: strings.Join(contents, "\n"),
+		IDs:   strings.Join(ids, "\n"),
+		Icons: strings.Join(pinned, "\n"),
+	})
+}
+
+func (d *daemon) handleClipboardPaste(msg ipc.Message, reply ipc.ReplyFunc) {
+	entries, err := d.clipStore.List("", 1000)
+	if err != nil {
+		_ = reply(ipc.Message{Type: "error", Message: err.Error()})
+		return
+	}
+	var content string
+	for _, e := range entries {
+		if fmt.Sprintf("%d", e.ID) == msg.ID {
+			content = e.Content
+			break
+		}
+	}
+	if content == "" || content == "[image]" {
+		_ = reply(ipc.Message{Type: "ok"})
+		return
+	}
+	cmd := exec.Command("wl-copy", "--", content)
+	if err := cmd.Run(); err != nil {
+		log.Printf("clipboard paste: wl-copy: %v", err)
+	}
+	_ = reply(ipc.Message{Type: "ok"})
+}
+
+func (d *daemon) handleClipboardDelete(msg ipc.Message, reply ipc.ReplyFunc) {
+	var id int64
+	fmt.Sscanf(msg.ID, "%d", &id)
+	if err := d.clipStore.Delete(id); err != nil {
+		_ = reply(ipc.Message{Type: "error", Message: err.Error()})
+		return
+	}
+	_ = reply(ipc.Message{Type: "ok"})
+}
+
+func (d *daemon) handleClipboardPin(msg ipc.Message, reply ipc.ReplyFunc) {
+	var id int64
+	fmt.Sscanf(msg.ID, "%d", &id)
+	if err := d.clipStore.TogglePin(id); err != nil {
+		_ = reply(ipc.Message{Type: "error", Message: err.Error()})
+		return
+	}
+	_ = reply(ipc.Message{Type: "ok"})
+}
+
+func (d *daemon) handleClipboardClear(msg ipc.Message, reply ipc.ReplyFunc) {
+	if err := d.clipStore.Clear(); err != nil {
+		_ = reply(ipc.Message{Type: "error", Message: err.Error()})
+		return
+	}
+	_ = reply(ipc.Message{Type: "ok"})
+}
+
+// watchClipboard spawns wl-paste --watch and stores each new clipboard entry (FR-01a).
+// It automatically restarts if the wl-paste process exits unexpectedly.
+func (d *daemon) watchClipboard(ctx context.Context, srv *ipc.Server) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := d.runClipboardWatcher(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("clipboard watcher: %v; restarting in 2s", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (d *daemon) runClipboardWatcher(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "wl-paste", "--watch", "cat")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("wl-paste not available: %w", err)
+	}
+	log.Println("clipboard watcher: started")
+
+	scanner := bufio.NewScanner(stdout)
+	// Allow up to 1MB clipboard entries.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			break
+		}
+		content := scanner.Text()
+		if content == "" {
+			continue
+		}
+		cfg := d.clipCfg()
+		if _, err := d.clipStore.Add(content, cfg); err != nil {
+			log.Printf("clipboard watcher: store: %v", err)
+		}
+	}
+	err = cmd.Wait()
+	log.Println("clipboard watcher: stopped")
+	if ctx.Err() != nil {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("wl-paste exited: %w", err)
+	}
+	return fmt.Errorf("wl-paste exited unexpectedly")
 }
 
 // streamAI calls the AI provider and sends token+done messages over reply (TR-02c).

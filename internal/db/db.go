@@ -51,6 +51,11 @@ func (d *DB) Close() error {
 	return d.conn.Close()
 }
 
+// Conn returns the underlying *sql.DB for packages that manage their own queries.
+func (d *DB) Conn() *sql.DB {
+	return d.conn
+}
+
 // migrate applies schema and pragma setup.
 func (d *DB) migrate() error {
 	stmts := []string{
@@ -62,6 +67,12 @@ func (d *DB) migrate() error {
 			result_kind    TEXT    NOT NULL DEFAULT '',
 			result_preview TEXT    NOT NULL DEFAULT '',
 			created_at     INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS clipboard_history (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			content   TEXT    NOT NULL,
+			copied_at INTEGER NOT NULL,
+			pinned    INTEGER NOT NULL DEFAULT 0
 		)`,
 	}
 	for _, s := range stmts {

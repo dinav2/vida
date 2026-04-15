@@ -19,7 +19,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: vida <command>\nCommands: show, hide, reload, clear-history, ping, status")
+		return fmt.Errorf("usage: vida <command>\nCommands: show, hide, reload, clear-history, clipboard, ping, status")
 	}
 
 	sockPath := sockFile()
@@ -53,6 +53,8 @@ func run(args []string) error {
 			return nil
 		}
 		return fmt.Errorf("unexpected response: %s", resp.Type)
+	case "clipboard":
+		return sendAndExpect(sockPath, ipc.Message{Type: "show_clipboard"}, "ok")
 	case "status":
 		resp, err := sendMsg(sockPath, ipc.Message{Type: "status"})
 		if err != nil {

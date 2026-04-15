@@ -9,6 +9,7 @@ import (
 	"github.com/dinav2/vida/internal/apps"
 	"github.com/dinav2/vida/internal/calc"
 	"github.com/dinav2/vida/internal/convert"
+	"github.com/dinav2/vida/internal/files"
 	"github.com/dinav2/vida/internal/shortcuts"
 )
 
@@ -21,6 +22,7 @@ const (
 	KindConvert     Kind = "convert"
 	KindShortcut    Kind = "shortcut"
 	KindAppList     Kind = "app_list"
+	KindFileList    Kind = "file_list"
 	KindAIStream    Kind = "ai_stream"
 	KindCancelled   Kind = "cancelled"
 	KindCommandList Kind = "command_list"
@@ -33,6 +35,13 @@ type AppEntry struct {
 	Icon  string
 	Exec  string
 	Score float64
+}
+
+// FileEntry is a file search result.
+type FileEntry struct {
+	Path string
+	Name string
+	Icon string
 }
 
 // Result is the output of a routing decision.
@@ -48,6 +57,9 @@ type Result struct {
 	// App results
 	Apps []AppEntry
 
+	// File search results
+	Files []FileEntry
+
 	// Command list result
 	CommandQuery string // text after ":", used for filtering
 
@@ -60,6 +72,7 @@ type Router struct {
 	shortcutHandler *shortcuts.Handler
 	appIndex        *apps.Index
 	appEntries      []AppEntry // for test injection
+	fileIndex       *files.Index
 	aiFunc          func(context.Context, string) Result
 	noAI            bool
 }
@@ -92,6 +105,13 @@ func WithAppIndex(idx *apps.Index) Option {
 func WithAIFunc(fn func(context.Context, string) Result) Option {
 	return func(r *Router) {
 		r.aiFunc = fn
+	}
+}
+
+// WithFileIndex sets the file index for filesystem search.
+func WithFileIndex(idx *files.Index) Option {
+	return func(r *Router) {
+		r.fileIndex = idx
 	}
 }
 
@@ -144,6 +164,23 @@ func (r *Router) Route(ctx context.Context, input string) Result {
 		if url, ok := r.shortcutHandler.Resolve(input); ok {
 			return Result{Kind: KindShortcut, ShortcutURL: url}
 		}
+	}
+
+	// 3.5. File search — "~" prefix (FR-01a SPEC-20260314-010)
+	if strings.HasPrefix(input, "~") {
+		query := strings.TrimSpace(strings.TrimPrefix(input, "~"))
+		if query == "" || r.fileIndex == nil {
+			return Result{Kind: KindEmpty}
+		}
+		matched := r.fileIndex.Search(query, 10)
+		if len(matched) == 0 {
+			return Result{Kind: KindEmpty}
+		}
+		entries := make([]FileEntry, len(matched))
+		for i, f := range matched {
+			entries[i] = FileEntry{Path: f.Path, Name: f.Name, Icon: f.Icon}
+		}
+		return Result{Kind: KindFileList, Files: entries}
 	}
 
 	// 4. App search

@@ -27,11 +27,21 @@ var defaultShortcuts = map[string]string{
 
 // Config is the top-level configuration structure.
 type Config struct {
-	AI       AIConfig       `toml:"ai"`
-	Search   SearchConfig   `toml:"search"`
-	UI       UIConfig       `toml:"ui"`
-	Commands CommandsConfig `toml:"commands"`
-	Notes    NotesConfig    `toml:"notes"`
+	AI        AIConfig        `toml:"ai"`
+	Search    SearchConfig    `toml:"search"`
+	Files     FilesConfig     `toml:"files"`
+	UI        UIConfig        `toml:"ui"`
+	Commands  CommandsConfig  `toml:"commands"`
+	Notes     NotesConfig     `toml:"notes"`
+	Clipboard ClipboardConfig `toml:"clipboard"`
+}
+
+// ClipboardConfig holds clipboard history settings (SPEC-20260318-011).
+type ClipboardConfig struct {
+	Enabled    bool     `toml:"enabled"`
+	MaxEntries int      `toml:"max_entries"`
+	MaxAgeDays int      `toml:"max_age_days"`
+	Ignore     []string `toml:"ignore"`
 }
 
 // NotesConfig holds settings for the :note command.
@@ -86,6 +96,12 @@ type OpenAIConfig struct {
 // SearchConfig holds web search shortcut definitions.
 type SearchConfig struct {
 	Shortcuts map[string]string `toml:"shortcuts"`
+}
+
+// FilesConfig holds file search index settings (SPEC-20260314-010).
+type FilesConfig struct {
+	Dirs          []string `toml:"dirs"`           // search roots; default: [$HOME]
+	IncludeHidden bool     `toml:"include_hidden"` // default: false
 }
 
 // UIConfig holds window appearance settings.
@@ -156,6 +172,11 @@ func defaults() *Config {
 			Position:   DefaultUIPosition,
 			MaxResults: DefaultUIMaxResults,
 		},
+		Clipboard: ClipboardConfig{
+			Enabled:    true,
+			MaxEntries: 500,
+			MaxAgeDays: 30,
+		},
 	}
 }
 
@@ -208,6 +229,14 @@ func merge(cfg, raw *Config) {
 		cfg.Commands.Builtins = raw.Commands.Builtins
 	}
 
+	// Files.
+	if len(raw.Files.Dirs) > 0 {
+		cfg.Files.Dirs = raw.Files.Dirs
+	}
+	if raw.Files.IncludeHidden {
+		cfg.Files.IncludeHidden = true
+	}
+
 	// Notes.
 	if raw.Notes.Dir != "" {
 		cfg.Notes.Dir = raw.Notes.Dir
@@ -220,5 +249,17 @@ func merge(cfg, raw *Config) {
 	}
 	if raw.Notes.Template != "" {
 		cfg.Notes.Template = raw.Notes.Template
+	}
+
+	// Clipboard — Enabled defaults to true; omit merge for the bool field
+	// because TOML zero-value (false) is indistinguishable from "not set".
+	if raw.Clipboard.MaxEntries != 0 {
+		cfg.Clipboard.MaxEntries = raw.Clipboard.MaxEntries
+	}
+	if raw.Clipboard.MaxAgeDays != 0 {
+		cfg.Clipboard.MaxAgeDays = raw.Clipboard.MaxAgeDays
+	}
+	if len(raw.Clipboard.Ignore) > 0 {
+		cfg.Clipboard.Ignore = raw.Clipboard.Ignore
 	}
 }

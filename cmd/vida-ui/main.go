@@ -57,6 +57,18 @@ extern void vida_note_get_tags(char *buf, int len);
 // Layer shell mode switching.
 extern void vida_enter_chat_mode(GtkWidget *win);
 extern void vida_enter_palette_mode(GtkWidget *win);
+
+// Clipboard history (SPEC-20260318-011) — stack page in main window.
+extern void       vida_clipboard_show(void);
+extern void       vida_clipboard_hide(void);
+extern void       vida_clipboard_set_entries(const char **contents,
+                                              const char **ids,
+                                              const char **pinned,
+                                              int n);
+extern const char *vida_clipboard_get_selected_id(void);
+extern void        vida_clipboard_get_search_text(char *buf, int buflen);
+extern void        vida_clipboard_clear_search(void);
+extern void        vida_clipboard_select_move(int delta);
 */
 import "C"
 
@@ -94,6 +106,7 @@ var selectedIdx = -1
 var currentKind string
 var currentAppIDs []string
 var currentAppExecs []string
+var currentFilePaths []string
 var currentCalcValue string
 var currentURL string
 var currentAIText string
@@ -109,6 +122,12 @@ type chatMsg struct {
 	role    string // "user" | "assistant"
 	content string
 }
+
+// Clipboard window state (only touched via gtkIdle)
+var (
+	clipEntryIDs      []string
+	clipEntryContents []string
+)
 
 var chatHistory []chatMsg  // message history for multi-turn (FR-04b)
 var chatCmdName string     // command name that started the session
@@ -181,6 +200,10 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 			returnToPalette()
 		case "note_form":
 			returnToPalette()
+		case "clipboard":
+			currentKind = ""
+			C.vida_clipboard_hide()
+			C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
 		default:
 			C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
 		}
@@ -201,6 +224,43 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 			return C.TRUE
 		}
 	}
+	// Clipboard mode: handle navigation and actions, pass typing to search entry.
+	if currentKind == "clipboard" {
+		switch {
+		case keyval == C.GDK_KEY_Return || keyval == C.GDK_KEY_KP_Enter:
+			selID := C.GoString(C.vida_clipboard_get_selected_id())
+			if selID != "" {
+				currentKind = ""
+				C.vida_clipboard_hide()
+				C.vida_hide((*C.GtkWidget)(unsafe.Pointer(userData)))
+				clipboardSendAndRefresh(ipc.Message{Type: "clipboard_paste", ID: selID})
+			}
+			return C.TRUE
+		case keyval == C.GDK_KEY_Up:
+			C.vida_clipboard_select_move(-1)
+			return C.TRUE
+		case keyval == C.GDK_KEY_Down:
+			C.vida_clipboard_select_move(1)
+			return C.TRUE
+		case keyval == C.GDK_KEY_Delete:
+			selID := C.GoString(C.vida_clipboard_get_selected_id())
+			if selID != "" {
+				clipboardSendAndRefresh(ipc.Message{Type: "clipboard_delete", ID: selID})
+			}
+			return C.TRUE
+		case state&C.GDK_CONTROL_MASK != 0 && state&C.GDK_SHIFT_MASK != 0 && keyval == C.GDK_KEY_C:
+			selID := C.GoString(C.vida_clipboard_get_selected_id())
+			if selID != "" {
+				clipboardSendAndRefresh(ipc.Message{Type: "clipboard_pin", ID: selID})
+			}
+			return C.TRUE
+		case state&C.GDK_CONTROL_MASK != 0 && state&C.GDK_SHIFT_MASK != 0 && keyval == C.GDK_KEY_X:
+			clipboardSendAndRefresh(ipc.Message{Type: "clipboard_clear"})
+			return C.TRUE
+		}
+		return C.FALSE // let typing reach clipboard search entry
+	}
+
 	// In chat/note modes: only the special shortcuts above are handled by us;
 	// everything else (Enter, arrows, typing) goes straight to the focused widget.
 	if currentKind == "chat" || currentKind == "note_form" {
@@ -275,6 +335,19 @@ func goOnKeyPressed(ctrl *C.GtkEventControllerKey, keyval C.guint,
 				cid := C.CString(id)
 				C.vida_launch_app(cid)
 				C.free(unsafe.Pointer(cid))
+				C.vida_hide(win)
+			}
+		case "file_list":
+			idx := selectedIdx
+			if idx < 0 {
+				idx = 0
+			}
+			if idx < len(currentFilePaths) {
+				path := currentFilePaths[idx]
+				fileURI := "file://" + path
+				cu := C.CString(fileURI)
+				C.vida_open_url(cu)
+				C.free(unsafe.Pointer(cu))
 				C.vida_hide(win)
 			}
 		case "calc", "convert":
@@ -479,6 +552,30 @@ func onInput(text string) {
 				}
 				C.vida_results_set_apps(gResults, &cnames[0], &cicons[0], C.int(len(cnames)))
 			})
+		case "file_list":
+			names := strings.Split(resp.Message, "\n")
+			paths := strings.Split(resp.Paths, "\n")
+			icons := strings.Split(resp.Icons, "\n")
+			gtkIdle(func() {
+				C.vida_answer_clear(gAnswer)
+				currentKind = "file_list"
+				currentFilePaths = paths
+				currentResultText = ""
+				selectedIdx = -1
+				cnames := make([]*C.char, len(names))
+				cicons := make([]*C.char, len(names))
+				for i, n := range names {
+					cnames[i] = C.CString(n)
+					defer C.free(unsafe.Pointer(cnames[i]))
+					icon := "text-x-generic"
+					if i < len(icons) && icons[i] != "" {
+						icon = icons[i]
+					}
+					cicons[i] = C.CString(icon)
+					defer C.free(unsafe.Pointer(cicons[i]))
+				}
+				C.vida_results_set_apps(gResults, &cnames[0], &cicons[0], C.int(len(cnames)))
+			})
 		case "ai_stream":
 			gtkIdle(func() {
 				C.vida_answer_clear(gAnswer)
@@ -493,6 +590,13 @@ func onInput(text string) {
 				go streamAI(id, text, sock)
 			})
 			aiDebounce.Trigger()
+		case "show_clipboard":
+			gtkIdle(func() {
+				currentKind = "clipboard"
+				C.vida_clipboard_clear_search()
+				C.vida_clipboard_show()
+			})
+			go fetchAndShowClipboard("")
 		case "empty", "cancelled", "":
 			gtkIdle(func() {
 				C.vida_answer_clear(gAnswer)
@@ -583,6 +687,124 @@ func cancelInflight() {
 	}
 }
 
+// ══════════════════════════════════════════════════════════════════
+// Clipboard window helpers (SPEC-20260318-011)
+// ══════════════════════════════════════════════════════════════════
+
+// fetchAndShowClipboard requests clipboard entries from the daemon and
+// populates the clipboard window list.
+func fetchAndShowClipboard(query string) {
+	conn, err := ipc.Connect(sockFile())
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	resp, err := conn.Send(ipc.Message{Type: "clipboard_list", Input: query})
+	if err != nil || resp.Type != "clipboard_entries" {
+		return
+	}
+
+	var contents, ids, pinned []string
+	if resp.Value != "" {
+		contents = strings.Split(resp.Value, "\n")
+	}
+	if resp.IDs != "" {
+		ids = strings.Split(resp.IDs, "\n")
+	}
+	if resp.Icons != "" {
+		pinned = strings.Split(resp.Icons, "\n")
+	}
+	n := len(contents)
+
+	gtkIdle(func() {
+		clipEntryIDs = ids
+		clipEntryContents = contents
+
+		if n == 0 {
+			C.vida_clipboard_set_entries(nil, nil, nil, 0)
+			return
+		}
+
+		cContents := make([]*C.char, n)
+		cIDs := make([]*C.char, n)
+		cPinned := make([]*C.char, n)
+		for i := 0; i < n; i++ {
+			c := ""
+			if i < len(contents) {
+				c = contents[i]
+			}
+			id := "0"
+			if i < len(ids) {
+				id = ids[i]
+			}
+			p := "0"
+			if i < len(pinned) {
+				p = pinned[i]
+			}
+			cContents[i] = C.CString(c)
+			cIDs[i] = C.CString(id)
+			cPinned[i] = C.CString(p)
+		}
+		defer func() {
+			for i := 0; i < n; i++ {
+				C.free(unsafe.Pointer(cContents[i]))
+				C.free(unsafe.Pointer(cIDs[i]))
+				C.free(unsafe.Pointer(cPinned[i]))
+			}
+		}()
+
+		C.vida_clipboard_set_entries(
+			(**C.char)(unsafe.Pointer(&cContents[0])),
+			(**C.char)(unsafe.Pointer(&cIDs[0])),
+			(**C.char)(unsafe.Pointer(&cPinned[0])),
+			C.int(n),
+		)
+	})
+}
+
+// clipboardSendAndRefresh sends a one-shot clipboard IPC message and refreshes the list.
+func clipboardSendAndRefresh(msg ipc.Message) {
+	go func() {
+		conn, err := ipc.Connect(sockFile())
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.Send(msg)
+
+		// Re-fetch with current search query.
+		var buf [512]C.char
+		C.vida_clipboard_get_search_text(&buf[0], 512)
+		query := C.GoString(&buf[0])
+		fetchAndShowClipboard(query)
+	}()
+}
+
+//export goOnClipboardSearchChanged
+func goOnClipboardSearchChanged(entry *C.GtkEntry, userData C.gpointer) {
+	_, _ = entry, userData
+	var buf [512]C.char
+	C.vida_clipboard_get_search_text(&buf[0], 512)
+	query := C.GoString(&buf[0])
+	go fetchAndShowClipboard(query)
+}
+
+//export goOnClipboardRowActivated
+func goOnClipboardRowActivated(btn *C.GtkButton, userData C.gpointer) {
+	_, _ = btn, userData
+	selID := C.GoString(C.vida_clipboard_get_selected_id())
+	if selID == "" {
+		return
+	}
+	gtkIdle(func() {
+		currentKind = ""
+		C.vida_clipboard_hide()
+		C.vida_hide(gWindow)
+	})
+	clipboardSendAndRefresh(ipc.Message{Type: "clipboard_paste", ID: selID})
+}
+
 // subscribeLoop maintains a persistent IPC connection for show/hide broadcasts.
 func subscribeLoop(sockPath string) {
 	for {
@@ -626,6 +848,19 @@ func subscribe(sockPath string) error {
 		case "hide":
 			cancelInflight()
 			gtkIdle(func() { C.vida_hide(gWindow) })
+		case "show_clipboard":
+			gtkIdle(func() {
+				currentKind = "clipboard"
+				C.vida_clipboard_clear_search()
+				C.vida_clipboard_show()
+				C.vida_show(gWindow)
+			})
+			go fetchAndShowClipboard("")
+		case "hide_clipboard":
+			gtkIdle(func() {
+				currentKind = ""
+				C.vida_clipboard_hide()
+			})
 		}
 	}
 }

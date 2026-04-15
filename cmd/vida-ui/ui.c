@@ -31,6 +31,16 @@ static GtkWidget *s_note_title    = NULL;
 static GtkWidget *s_note_body_tv  = NULL;
 static GtkWidget *s_note_tags     = NULL;
 
+/* Clipboard page widget references (populated in vida_build_window) */
+static GtkWidget *s_clip_search = NULL;
+static GtkWidget *s_clip_list   = NULL;
+static int        s_clip_sel    = -1;
+static int        s_clip_count  = 0;
+
+/* Forward declaration for clipboard search callback */
+extern void goOnClipboardSearchChanged(GtkEntry *entry, gpointer user_data);
+extern void goOnClipboardRowActivated(GtkButton *btn, gpointer user_data);
+
 /* C-side wrapper callbacks */
 void vida_on_activate(GtkApplication *app, gpointer data) {
     goOnActivate(app, data);
@@ -623,6 +633,55 @@ GtkWidget *vida_build_window(GtkApplication *app,
     gtk_label_set_xalign(GTK_LABEL(note_hint), 0.0f);
     gtk_box_append(GTK_BOX(note_panel), note_hint);
 
+    /* ── CLIPBOARD PAGE ──────────────────────────────────────── */
+    GtkWidget *clip_panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(clip_panel, "vida-panel");
+    gtk_widget_set_overflow(clip_panel, GTK_OVERFLOW_HIDDEN);
+    gtk_stack_add_named(GTK_STACK(stack), clip_panel, "clipboard");
+
+    /* Header row: search icon + entry */
+    GtkWidget *clip_header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_box_append(GTK_BOX(clip_panel), clip_header);
+
+    GtkWidget *clip_icon = gtk_image_new_from_icon_name("edit-find-symbolic");
+    gtk_widget_add_css_class(clip_icon, "vida-search-icon");
+    gtk_box_append(GTK_BOX(clip_header), clip_icon);
+
+    GtkWidget *clip_search = gtk_entry_new();
+    gtk_widget_add_css_class(clip_search, "vida-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(clip_search), "Search clipboard\xe2\x80\xa6");
+    gtk_widget_set_hexpand(clip_search, TRUE);
+    gtk_box_append(GTK_BOX(clip_header), clip_search);
+    s_clip_search = clip_search;
+
+    g_signal_connect(clip_search, "changed",
+                     G_CALLBACK(goOnClipboardSearchChanged), NULL);
+
+    /* Separator */
+    GtkWidget *clip_sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_add_css_class(clip_sep, "vida-separator");
+    gtk_box_append(GTK_BOX(clip_panel), clip_sep);
+
+    /* Scrolled list */
+    GtkWidget *clip_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(clip_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request(clip_scroll, -1, 460);
+    gtk_box_append(GTK_BOX(clip_panel), clip_scroll);
+
+    GtkWidget *clip_list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(clip_list, "vida-results");
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(clip_scroll), clip_list);
+    s_clip_list = clip_list;
+
+    /* Hint bar */
+    GtkWidget *clip_hint = gtk_label_new(
+        "Enter  paste  \xc2\xb7  Del  delete  \xc2\xb7  \xe2\x8c\x83\xe2\x87\xa7" "C  pin  \xc2\xb7  \xe2\x8c\x83\xe2\x87\xa7" "X  clear  \xc2\xb7  Esc  close");
+    gtk_widget_add_css_class(clip_hint, "vida-note-hint");
+    gtk_label_set_xalign(GTK_LABEL(clip_hint), 0.5f);
+    gtk_label_set_ellipsize(GTK_LABEL(clip_hint), PANGO_ELLIPSIZE_END);
+    gtk_box_append(GTK_BOX(clip_panel), clip_hint);
+
     /* ── KEY CONTROLLER ──────────────────────────────────────── */
     GtkEventController *key_ctrl = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(key_ctrl, GTK_PHASE_CAPTURE);
@@ -638,7 +697,6 @@ GtkWidget *vida_build_window(GtkApplication *app,
     g_timeout_add(16, G_SOURCE_FUNC(goProcessIdle), NULL);
 
     gtk_widget_set_visible(win, FALSE);
-    gtk_window_present(GTK_WINDOW(win));
 
     *out_entry   = entry;
     *out_results = results;
@@ -659,6 +717,7 @@ void vida_show(GtkWidget *w) {
      * remove the class so CSS transition fades from 0→1. */
     if (s_stack) gtk_widget_add_css_class(GTK_WIDGET(s_stack), "vida-hidden");
     gtk_widget_set_visible(w, TRUE);
+    gtk_window_present(GTK_WINDOW(w));
     if (s_stack) g_idle_add(_show_stack_fade, s_stack);
 }
 void vida_hide(GtkWidget *w)  { gtk_widget_set_visible(w, FALSE); }
@@ -1183,4 +1242,167 @@ void vida_open_url(const char *url) {
     GtkUriLauncher *launcher = gtk_uri_launcher_new(url);
     gtk_uri_launcher_launch(launcher, NULL, NULL, NULL, NULL);
     g_object_unref(launcher);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * Clipboard History (SPEC-20260318-011) — stack page in main window
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* Switch to the clipboard stack page. */
+void vida_clipboard_show(void) {
+    if (!s_stack) return;
+    gtk_stack_set_transition_type(GTK_STACK(s_stack),
+                                  GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT);
+    gtk_stack_set_transition_duration(GTK_STACK(s_stack), 200);
+    gtk_stack_set_visible_child_name(GTK_STACK(s_stack), "clipboard");
+    if (s_clip_search) gtk_widget_grab_focus(s_clip_search);
+}
+
+/* Switch back from clipboard to palette. */
+void vida_clipboard_hide(void) {
+    if (!s_stack) return;
+    s_clip_sel = -1;
+    gtk_stack_set_transition_type(GTK_STACK(s_stack),
+                                  GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
+    gtk_stack_set_transition_duration(GTK_STACK(s_stack), 200);
+    gtk_stack_set_visible_child_name(GTK_STACK(s_stack), "palette");
+}
+
+/* Populate the list with n entries.
+ * contents[i]: display text (may be truncated)
+ * ids[i]:      entry ID as decimal string
+ * pinned[i]:   "1" if pinned, "0" otherwise
+ */
+void vida_clipboard_set_entries(const char **contents, const char **ids,
+                                 const char **pinned, int n) {
+    if (!s_clip_list) return;
+
+    /* Clear existing rows */
+    GtkWidget *child;
+    while ((child = gtk_widget_get_first_child(s_clip_list)) != NULL)
+        gtk_box_remove(GTK_BOX(s_clip_list), child);
+
+    s_clip_count = n;
+    s_clip_sel   = (n > 0) ? 0 : -1;
+
+    for (int i = 0; i < n; i++) {
+        const char *content = contents[i] ? contents[i] : "";
+        const char *id      = ids[i]      ? ids[i]      : "0";
+        int is_pinned = (pinned[i] && pinned[i][0] == '1');
+
+        GtkWidget *btn = gtk_button_new();
+        gtk_widget_add_css_class(btn, "vida-row");
+        gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+        if (i == 0)
+            gtk_widget_add_css_class(btn, "vida-row-selected");
+
+        /* Store ID on the button */
+        g_object_set_data_full(G_OBJECT(btn), "clip-id",
+                               g_strdup(id), g_free);
+
+        /* Row content: optional pin indicator + text */
+        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_hexpand(hbox, TRUE);
+        gtk_widget_set_valign(hbox, GTK_ALIGN_CENTER);
+
+        if (is_pinned) {
+            GtkWidget *pin_icon = gtk_label_new("●");
+            gtk_widget_add_css_class(pin_icon, "vida-row-type");
+            gtk_box_append(GTK_BOX(hbox), pin_icon);
+        }
+
+        /* Truncate display text at 80 chars */
+        char display[256];
+        int len = (int)strlen(content);
+        if (len > 80) {
+            /* UTF-8 safe copy of first 80 bytes, append ellipsis */
+            strncpy(display, content, 80);
+            display[80] = '\0';
+            strncat(display, "\xe2\x80\xa6", sizeof(display) - strlen(display) - 1);
+        } else {
+            strncpy(display, content, sizeof(display) - 1);
+            display[sizeof(display) - 1] = '\0';
+        }
+
+        GtkWidget *lbl = gtk_label_new(display);
+        gtk_widget_add_css_class(lbl, "vida-row-label");
+        gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+        gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
+        gtk_widget_set_hexpand(lbl, TRUE);
+        gtk_box_append(GTK_BOX(hbox), lbl);
+
+        gtk_button_set_child(GTK_BUTTON(btn), hbox);
+
+        g_signal_connect(btn, "clicked",
+                         G_CALLBACK(goOnClipboardRowActivated), NULL);
+        gtk_box_append(GTK_BOX(s_clip_list), btn);
+    }
+
+    if (n == 0) {
+        GtkWidget *empty = gtk_label_new("No clipboard entries");
+        gtk_widget_add_css_class(empty, "vida-row-type");
+        gtk_widget_set_margin_top(empty, 20);
+        gtk_widget_set_margin_bottom(empty, 20);
+        gtk_box_append(GTK_BOX(s_clip_list), empty);
+    }
+}
+
+/* Move selection up/down. delta = -1 (up) or +1 (down). */
+static void clip_move_selection(int delta) {
+    if (s_clip_count <= 0) return;
+    int next = s_clip_sel + delta;
+    if (next < 0) next = 0;
+    if (next >= s_clip_count) next = s_clip_count - 1;
+    if (next == s_clip_sel) return;
+
+    /* Walk rows to update CSS classes */
+    int idx = 0;
+    GtkWidget *child = gtk_widget_get_first_child(s_clip_list);
+    while (child && idx < s_clip_count) {
+        if (idx == s_clip_sel)
+            gtk_widget_remove_css_class(child, "vida-row-selected");
+        if (idx == next)
+            gtk_widget_add_css_class(child, "vida-row-selected");
+        child = gtk_widget_get_next_sibling(child);
+        idx++;
+    }
+    s_clip_sel = next;
+}
+
+/* Return the ID string of the currently selected row (static lifetime via g_object_get_data). */
+const char *vida_clipboard_get_selected_id(void) {
+    if (!s_clip_list || s_clip_sel < 0) return NULL;
+    int idx = 0;
+    GtkWidget *child = gtk_widget_get_first_child(s_clip_list);
+    while (child) {
+        if (idx == s_clip_sel)
+            return (const char *)g_object_get_data(G_OBJECT(child), "clip-id");
+        child = gtk_widget_get_next_sibling(child);
+        idx++;
+    }
+    return NULL;
+}
+
+/* Get current clipboard search text. */
+void vida_clipboard_get_search_text(char *buf, int buflen) {
+    if (!s_clip_search || buflen <= 0) { if (buf && buflen > 0) buf[0] = '\0'; return; }
+    const char *text = gtk_entry_buffer_get_text(
+        gtk_entry_get_buffer(GTK_ENTRY(s_clip_search)));
+    strncpy(buf, text ? text : "", buflen - 1);
+    buf[buflen - 1] = '\0';
+}
+
+/* Clear the search entry without triggering 'changed'. */
+void vida_clipboard_clear_search(void) {
+    if (!s_clip_search) return;
+    g_signal_handlers_block_by_func(s_clip_search,
+                                     G_CALLBACK(goOnClipboardSearchChanged), NULL);
+    gtk_editable_set_text(GTK_EDITABLE(s_clip_search), "");
+    g_signal_handlers_unblock_by_func(s_clip_search,
+                                       G_CALLBACK(goOnClipboardSearchChanged), NULL);
+}
+
+/* Move selection — called from Go key handler. */
+void vida_clipboard_select_move(int delta) {
+    clip_move_selection(delta);
 }

@@ -36,6 +36,7 @@ type Message struct {
 	IDs      string `json:"ids,omitempty"`   // newline-separated desktop IDs for app_list
 	Exec     string `json:"exec,omitempty"`  // newline-separated exec strings for app_list
 	Icons    string `json:"icons"` // newline-separated icon names for app_list (always sent in app_list)
+	Paths    string `json:"paths,omitempty"` // newline-separated absolute paths for file_list
 
 	// Command mode fields.
 	Name    string         `json:"name,omitempty"`    // command name for run_command
@@ -163,7 +164,7 @@ func (s *Server) dispatch(msg Message, conn net.Conn, se *syncEnc, reply func(Me
 		s.subs[conn] = se
 		s.mu.Unlock()
 		// no reply: subscriber uses SendNoReply
-	case "show", "hide":
+	case "show", "hide", "show_clipboard", "hide_clipboard":
 		s.broadcast(Message{Type: msg.Type})
 		_ = reply(Message{Type: "ok"})
 	default:
